@@ -19,10 +19,10 @@ s3 = boto3.client('s3')
 dynamodb = boto3.resource('dynamodb')
 
 # Get environment variables
-MEDIA_BUCKET = os.environ['MEDIA_BUCKET_NAME']
-MEDIA_TABLE = os.environ['MEDIA_TABLE_NAME']
-USER_TABLE = os.environ['USER_TABLE_NAME']
-QR_MAPPING_TABLE = os.environ['QR_MAPPING_TABLE_NAME']
+MEDIA_BUCKET = os.environ['MEDIA_BUCKET']
+MEDIA_TABLE = os.environ['MEDIA_TABLE']
+USER_TABLE = os.environ['USER_TABLE']
+QR_MAPPING_TABLE = os.environ['QR_MAPPING_TABLE']
 
 # Initialize DynamoDB tables
 media_table = dynamodb.Table(MEDIA_TABLE)
