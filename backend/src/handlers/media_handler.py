@@ -122,9 +122,11 @@ def normalize_path(path: str) -> str:
     # For proxy integration with {proxy+}, we might receive paths like
     # /api/v1/media or /media depending on configuration
     if path.startswith('/api/v1/'):
-        path = path[7:]  # Remove /api/v1/
-    elif path.startswith('/api/v1'):
-        path = path[6:]  # Remove /api/v1
+        # Path like /api/v1/media -> /media
+        path = '/' + path[8:]
+    elif path == '/api/v1' or path == '/api/v1/':
+        # If it's just the API root without additional path, use root
+        path = '/'
     
     # Also handle proxy path parameter
     if 'proxy' in path:
@@ -190,6 +192,10 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             
             return {
                 'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
                 'body': json.dumps({
                     'upload_url': upload_url,
                     'media_id': media_id,
@@ -213,6 +219,10 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             if not response.get('Items'):
                 return {
                     'statusCode': 404,
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
                     'body': json.dumps({'error': 'Media not found'})
                 }
                 
@@ -225,6 +235,10 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             
             return {
                 'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
                 'body': json.dumps({
                     'download_url': download_url,
                     'metadata': convert_dynamodb_item(item)
@@ -239,6 +253,10 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             if not media_id:
                 return {
                     'statusCode': 400,
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
                     'body': json.dumps({'error': 'media_id is required'})
                 }
                 
@@ -256,6 +274,10 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             if not response.get('Items'):
                 return {
                     'statusCode': 404,
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
                     'body': json.dumps({'error': 'Media not found'})
                 }
             
@@ -272,6 +294,10 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             
             return {
                 'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
                 'body': json.dumps({
                     'qr_code': qr_code,
                     'media_id': media_id,
@@ -293,6 +319,10 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             if 'Item' not in response:
                 return {
                     'statusCode': 404,
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
                     'body': json.dumps({'error': 'QR code not found'})
                 }
                 
@@ -302,11 +332,19 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             if item['expires_at'] < int(datetime.now().timestamp()):
                 return {
                     'statusCode': 410,
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
                     'body': json.dumps({'error': 'QR code has expired'})
                 }
                 
             return {
                 'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
                 'body': json.dumps(convert_dynamodb_item(item))
             }
         
@@ -314,14 +352,18 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         elif method == 'GET' and (normalized_path == '/' or normalized_path == ''):
             return {
                 'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
                 'body': json.dumps({
                     'message': 'Kiosk Media API',
                     'version': '1.0',
                     'endpoints': {
-                        'POST /media': 'Generate upload URL for media',
-                        'GET /media/{id}': 'Get media information and download URL',
-                        'POST /qr': 'Generate QR code for media',
-                        'GET /qr/{code}': 'Lookup QR code mapping'
+                        'POST /api/v1/media': 'Generate upload URL for media',
+                        'GET /api/v1/media/{id}': 'Get media information and download URL',
+                        'POST /api/v1/qr': 'Generate QR code for media',
+                        'GET /api/v1/qr/{code}': 'Lookup QR code mapping'
                     }
                 })
             }
@@ -330,6 +372,10 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             logger.warning(f"Path not found: {path} (normalized: {normalized_path})")
             return {
                 'statusCode': 404,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
                 'body': json.dumps({
                     'error': 'Not found',
                     'path': path,
@@ -342,5 +388,9 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         logger.error(f"Error processing request: {str(e)}", exc_info=True)
         return {
             'statusCode': 500,
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            },
             'body': json.dumps({'error': f'Internal server error: {str(e)}'})
         } 
