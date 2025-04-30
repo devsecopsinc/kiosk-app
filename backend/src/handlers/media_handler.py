@@ -19,10 +19,10 @@ s3 = boto3.client('s3')
 dynamodb = boto3.resource('dynamodb')
 
 # Get environment variables
-MEDIA_BUCKET = os.environ['MEDIA_BUCKET']
-MEDIA_TABLE = os.environ['MEDIA_TABLE']
-USER_TABLE = os.environ['USER_TABLE']
-QR_MAPPING_TABLE = os.environ['QR_MAPPING_TABLE']
+MEDIA_BUCKET = os.environ['MEDIA_BUCKET_NAME']
+MEDIA_TABLE = os.environ['MEDIA_TABLE_NAME']
+USER_TABLE = os.environ['USER_TABLE_NAME']
+QR_MAPPING_TABLE = os.environ['QR_MAPPING_TABLE_NAME']
 
 # Initialize DynamoDB tables
 media_table = dynamodb.Table(MEDIA_TABLE)
@@ -115,17 +115,72 @@ def create_qr_mapping(media_id: str, url: str, expires_at: int) -> Dict[str, Any
         logger.error(f"Error creating QR mapping: {str(e)}")
         raise
 
+def normalize_path(path: str) -> str:
+    """Normalize API path to handle proxy integration properly."""
+    logger.info(f"Original path received: {path}")
+    
+    # For proxy integration with {proxy+}, we might receive paths like
+    # /api/v1/media or /media depending on configuration
+    if path.startswith('/api/v1/'):
+        path = path[7:]  # Remove /api/v1/
+    elif path.startswith('/api/v1'):
+        path = path[6:]  # Remove /api/v1
+    
+    # Also handle proxy path parameter
+    if 'proxy' in path:
+        path = '/' + path.replace('proxy', '').strip('/')
+    
+    logger.info(f"Normalized path: {path}")
+    return path
+
+def extract_path_param(path: str, resource: str) -> str:
+    """Extract path parameter from path based on resource pattern."""
+    # Example: /media/abc123 with resource /media/{id} should return abc123
+    parts = path.strip('/').split('/')
+    resource_parts = resource.strip('/').split('/')
+    
+    if len(parts) != len(resource_parts):
+        return None
+    
+    for i, (path_part, resource_part) in enumerate(zip(parts, resource_parts)):
+        if resource_part.startswith('{') and resource_part.endswith('}'):
+            return path_part
+    
+    return None
+
 def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """Main Lambda handler."""
     try:
-        logger.info(f"Processing event: {json.dumps(event)}")
+        logger.info(f"Received event: {json.dumps(event)}")
         
+        # Extract method and path from event
         method = event['httpMethod']
-        path = event['path']
+        path = event.get('path', '')
+        
+        # Get the proxy parameter if it exists (for proxy integration)
+        proxy_param = None
+        if event.get('pathParameters') and 'proxy' in event['pathParameters']:
+            proxy_param = event['pathParameters']['proxy']
+            logger.info(f"Proxy parameter: {proxy_param}")
+            
+            # If path is empty but we have a proxy param, use it
+            if not path or path == '/api/v1':
+                path = f"/api/v1/{proxy_param}"
+        
+        # Normalize the path
+        normalized_path = normalize_path(path)
+        logger.info(f"Normalized path: {normalized_path}")
+        
+        # Extract the base path and ID if present
+        path_parts = normalized_path.strip('/').split('/')
+        base_path = f"/{path_parts[0]}" if path_parts else "/"
+        path_id = path_parts[1] if len(path_parts) > 1 else None
+        
+        logger.info(f"Base path: {base_path}, Path ID: {path_id}")
         
         # Handle media upload request
-        if method == 'POST' and path == '/media':
-            body = json.loads(event['body'])
+        if method == 'POST' and base_path == '/media':
+            body = json.loads(event['body']) if event.get('body') else {}
             metadata = MediaMetadata(**body)
             
             media_id = base64.urlsafe_b64encode(os.urandom(16)).decode('utf-8')
@@ -143,8 +198,8 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             }
             
         # Handle media retrieval
-        elif method == 'GET' and path.startswith('/media/'):
-            media_id = event['pathParameters']['id']
+        elif method == 'GET' and base_path == '/media' and path_id:
+            media_id = path_id
             
             # Query for items with the given media_id
             response = media_table.query(
@@ -177,9 +232,16 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             }
             
         # Handle QR code generation
-        elif method == 'POST' and path == '/qr':
-            body = json.loads(event['body'])
-            media_id = body['media_id']
+        elif method == 'POST' and base_path == '/qr':
+            body = json.loads(event['body']) if event.get('body') else {}
+            media_id = body.get('media_id')
+            
+            if not media_id:
+                return {
+                    'statusCode': 400,
+                    'body': json.dumps({'error': 'media_id is required'})
+                }
+                
             expires_at = body.get('expires_at', int((datetime.now() + timedelta(days=7)).timestamp()))
             
             # Get media info first
@@ -218,8 +280,8 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             }
             
         # Handle QR code lookup
-        elif method == 'GET' and path.startswith('/qr/'):
-            code = event['pathParameters']['code']
+        elif method == 'GET' and base_path == '/qr' and path_id:
+            code = path_id
             
             response = qr_mapping_table.get_item(
                 Key={
@@ -247,16 +309,38 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 'statusCode': 200,
                 'body': json.dumps(convert_dynamodb_item(item))
             }
+        
+        # Root API path - return available endpoints
+        elif method == 'GET' and (normalized_path == '/' or normalized_path == ''):
+            return {
+                'statusCode': 200,
+                'body': json.dumps({
+                    'message': 'Kiosk Media API',
+                    'version': '1.0',
+                    'endpoints': {
+                        'POST /media': 'Generate upload URL for media',
+                        'GET /media/{id}': 'Get media information and download URL',
+                        'POST /qr': 'Generate QR code for media',
+                        'GET /qr/{code}': 'Lookup QR code mapping'
+                    }
+                })
+            }
             
         else:
+            logger.warning(f"Path not found: {path} (normalized: {normalized_path})")
             return {
                 'statusCode': 404,
-                'body': json.dumps({'error': 'Not found'})
+                'body': json.dumps({
+                    'error': 'Not found',
+                    'path': path,
+                    'normalized_path': normalized_path,
+                    'method': method
+                })
             }
             
     except Exception as e:
-        logger.error(f"Error processing request: {str(e)}")
+        logger.error(f"Error processing request: {str(e)}", exc_info=True)
         return {
             'statusCode': 500,
-            'body': json.dumps({'error': 'Internal server error'})
+            'body': json.dumps({'error': f'Internal server error: {str(e)}'})
         } 
