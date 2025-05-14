@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import qrcode
 from io import BytesIO
 import base64
+import urllib.parse
 from pydantic import BaseModel, Field
 from decimal import Decimal
 
@@ -51,17 +52,31 @@ def convert_dynamodb_item(item: Dict[str, Any]) -> Dict[str, Any]:
 def generate_presigned_url(bucket: str, key: str, operation: str, expires_in: int = 3600, response_headers: Dict[str, str] = None) -> str:
     """Generate a presigned URL for S3 operations."""
     try:
+        logger.info(f"Generating presigned URL: bucket={bucket}, key={key}, operation={operation}")
         params = {'Bucket': bucket, 'Key': key}
         
         # Add response headers if provided
         if response_headers:
             params.update(response_headers)
+            logger.info(f"Adding response headers: {response_headers}")
             
         url = s3.generate_presigned_url(
             ClientMethod=operation,
             Params=params,
             ExpiresIn=expires_in
         )
+        
+        # Log the generated URL
+        safe_url = url[:50] + '...' if len(url) > 50 else url
+        logger.info(f"Generated presigned URL: {safe_url}")
+        
+        # Make sure the URL is properly encoded
+        # URL format should be: https://bucket.s3.amazonaws.com/key?params
+        # AWS SDK should handle encoding properly, but we can add extra verification here
+        if '%' in key and '%25' not in url:
+            logger.warning(f"Key contains percent signs that might not be properly encoded: {key}")
+        
+        # Return the URL
         return url
     except Exception as e:
         logger.error(f"Error generating presigned URL: {str(e)}")
@@ -156,6 +171,23 @@ def extract_path_param(path: str, resource: str) -> str:
     
     return None
 
+def generate_media_path(media_id: str, file_name: str) -> str:
+    """Generate a path for media storage with simplified date-based structure."""
+    now = datetime.now()
+    date_string = now.strftime("%Y-%m-%d")
+    
+    # Extract just the filename without path if file_name includes path
+    base_file_name = os.path.basename(file_name)
+    
+    # URL encode the media_id to ensure it works in S3 paths
+    # This is important for Base64 IDs which may contain +, / and = characters
+    # Note: AWS SDK will handle additional encoding as needed
+    safe_media_id = urllib.parse.quote(media_id, safe='')
+    
+    # Create simplified path: media/YYYY-MM-DD/media_id/file_name
+    # Keep the "media/" prefix for compatibility
+    return f"media/{date_string}/{safe_media_id}/{base_file_name}"
+
 def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """Main Lambda handler."""
     try:
@@ -191,10 +223,23 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             body = json.loads(event['body']) if event.get('body') else {}
             metadata = MediaMetadata(**body)
             
+            # Strip any path from the filename - only use basename
+            file_name = os.path.basename(metadata.file_name)
+            metadata.file_name = file_name
+            
             media_id = base64.urlsafe_b64encode(os.urandom(16)).decode('utf-8')
-            upload_url = generate_presigned_url(MEDIA_BUCKET, f"media/{media_id}/{metadata.file_name}", 'put_object')
+            file_path = generate_media_path(media_id, file_name)
+            upload_url = generate_presigned_url(MEDIA_BUCKET, file_path, 'put_object')
             
             metadata_item = store_media_metadata(metadata, media_id)
+            
+            # Store the file path in metadata for later retrieval
+            metadata_item['file_path'] = file_path
+            media_table.update_item(
+                Key={'pk': f"MEDIA#{media_id}", 'sk': f"METADATA#{file_name}"},
+                UpdateExpression="SET file_path = :file_path",
+                ExpressionAttributeValues={':file_path': file_path}
+            )
             
             return {
                 'statusCode': 200,
@@ -211,7 +256,9 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             
         # Handle media retrieval
         elif method == 'GET' and base_path == '/media' and path_id:
-            media_id = path_id
+            # URL decode the media_id from the path parameter
+            # This is necessary as API Gateway may deliver URL-encoded values
+            media_id = urllib.parse.unquote(path_id)
             
             # Query for items with the given media_id
             response = media_table.query(
@@ -233,9 +280,26 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 }
                 
             item = response['Items'][0]
+            
+            # Use stored file_path if available, otherwise generate path
+            if 'file_path' in item:
+                file_path = item['file_path']
+            else:
+                # Generate path with proper URL encoding
+                safe_media_id = urllib.parse.quote(media_id, safe='')
+                file_path = f"media/{media_id}/{item['file_name']}"
+                # For compatibility, try to handle legacy paths by encoding the media_id
+                if 'creation_date' in item:
+                    date_string = datetime.fromtimestamp(int(item['created_at'])).strftime("%Y-%m-%d")
+                    file_path = f"media/{date_string}/{safe_media_id}/{item['file_name']}"
+            
+            # Add debug info for troubleshooting
+            logger.info(f"Media ID: {media_id}")
+            logger.info(f"File path: {file_path}")
+            
             download_url = generate_presigned_url(
                 MEDIA_BUCKET,
-                f"media/{media_id}/{item['file_name']}",
+                file_path,
                 'get_object',
                 response_headers={'ResponseContentType': item['content_type']}
             )
@@ -266,7 +330,10 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                     },
                     'body': json.dumps({'error': 'media_id is required'})
                 }
-                
+            
+            # Ensure media_id is URL decoded
+            media_id = urllib.parse.unquote(media_id)
+            
             expires_at = body.get('expires_at', int((datetime.now() + timedelta(days=7)).timestamp()))
             
             # Get media info first
@@ -299,9 +366,21 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 logger.info(f"Using frontend URL for QR code: {url_to_use}")
             else:
                 # Use direct S3 download link
+                # Use stored file_path if available, otherwise generate URL encoded path
+                if 'file_path' in item:
+                    file_path = item['file_path']
+                else:
+                    # URL encode the media_id for S3 paths
+                    safe_media_id = urllib.parse.quote(media_id, safe='')
+                    if 'creation_date' in item:
+                        date_string = datetime.fromtimestamp(int(item['created_at'])).strftime("%Y-%m-%d")
+                        file_path = f"media/{date_string}/{safe_media_id}/{item['file_name']}"
+                    else:
+                        file_path = f"media/{safe_media_id}/{item['file_name']}"
+                
                 url_to_use = generate_presigned_url(
                     MEDIA_BUCKET,
-                    f"media/{media_id}/{item['file_name']}",
+                    file_path,
                     'get_object',
                     expires_in=7*24*3600,  # 7 days
                     response_headers={'ResponseContentType': item['content_type']}

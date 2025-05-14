@@ -1,5 +1,94 @@
 import React, { useEffect, useState } from 'react';
 
+// Configuration types
+interface AppConfig {
+  apiUrl: string;
+}
+
+// Get configuration from different sources
+const getConfig = async (): Promise<AppConfig> => {
+  // Default values
+  const defaultConfig: AppConfig = {
+    apiUrl: '/api/v1'
+  };
+
+  try {
+    // Try to load config.json which may be generated during deployment
+    const configResponse = await fetch('/config.json');
+    if (configResponse.ok) {
+      const configData = await configResponse.json();
+      console.log('Loaded config from config.json:', configData);
+      return { ...defaultConfig, ...configData };
+    }
+  } catch (err) {
+    console.log('Could not load config.json, using environment detection');
+  }
+
+  // Try to get API URL from meta tag first (highest priority)
+  const apiUrlMeta = document.querySelector('meta[name="api-url"]');
+  if (apiUrlMeta && apiUrlMeta.getAttribute('content')) {
+    const metaApiUrl = apiUrlMeta.getAttribute('content') || '';
+    console.log('Found API URL in meta tag:', metaApiUrl);
+    return { ...defaultConfig, apiUrl: metaApiUrl };
+  }
+
+  // Determine API URL based on environment
+  const hostname = window.location.hostname;
+  const protocol = window.location.protocol;
+  let apiUrl = defaultConfig.apiUrl;
+
+  if (hostname.includes('localhost') || hostname.includes('127.0.0.1')) {
+    // Local development - use relative path
+    console.log('Development environment detected, using relative API path');
+  } else if (hostname.includes('cloudfront')) {
+    console.log('CloudFront deployment detected');
+
+    // First try the same domain with /api/v1 path (most common setup)
+    try {
+      console.log('Trying API at same domain with /api/v1 path');
+      const testResponse = await fetch(`${protocol}//${hostname}/api/v1`);
+
+      // Check if the response is JSON, not HTML
+      const contentType = testResponse.headers.get('content-type');
+      if (testResponse.ok && contentType && contentType.includes('application/json')) {
+        apiUrl = `/api/v1`;
+        console.log('Successfully detected API at same domain');
+        return { ...defaultConfig, apiUrl };
+      } else {
+        console.log('API not found at same domain, response was not JSON');
+      }
+    } catch (error) {
+      console.log('Error testing API at same domain:', error);
+    }
+
+    // Try with separate API subdomain (api.*)
+    try {
+      // Extract distribution ID from hostname
+      const cfId = hostname.split('.')[0];
+      console.log('CloudFront distribution ID:', cfId);
+
+      const apiHostname = hostname.replace(cfId, 'api');
+      const testUrl = `${protocol}//${apiHostname}/api/v1`;
+
+      console.log('Trying to detect API URL at:', testUrl);
+      const testResponse = await fetch(testUrl);
+
+      // Check if the response is JSON, not HTML
+      const contentType = testResponse.headers.get('content-type');
+      if (testResponse.ok && contentType && contentType.includes('application/json')) {
+        apiUrl = testUrl;
+        console.log('Successfully detected API URL:', apiUrl);
+        return { ...defaultConfig, apiUrl };
+      }
+    } catch (error) {
+      console.log('Could not auto-detect API URL on separate domain, falling back to relative path');
+    }
+  }
+
+  console.log('Using API URL:', apiUrl);
+  return { ...defaultConfig, apiUrl };
+};
+
 interface MediaMetadata {
   file_name: string;
   content_type: string;
@@ -19,32 +108,54 @@ const App: React.FC = () => {
   const [mediaData, setMediaData] = useState<MediaResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [config, setConfig] = useState<AppConfig | null>(null);
 
   useEffect(() => {
-    // Get media ID from URL query parameter
-    const urlParams = new URLSearchParams(window.location.search);
-    const id = urlParams.get('id');
+    // Load configuration when the application starts
+    const loadConfig = async () => {
+      try {
+        const appConfig = await getConfig();
+        setConfig(appConfig);
+        console.log('App configuration loaded:', appConfig);
 
-    if (id) {
-      setMediaId(id);
-      fetchMediaData(id);
-    }
+        // After loading configuration, check ID in URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const id = urlParams.get('id');
+
+        if (id) {
+          setMediaId(id);
+          fetchMediaData(id, appConfig.apiUrl);
+        }
+      } catch (err) {
+        console.error('Error loading configuration:', err);
+        setError('Failed to load application configuration');
+      }
+    };
+
+    loadConfig();
   }, []);
 
-  const fetchMediaData = async (id: string) => {
+  const fetchMediaData = async (id: string, apiBaseUrl: string) => {
     setLoading(true);
     setError(null);
 
     try {
-      // Replace with your actual API endpoint
-      const apiUrl = process.env.REACT_APP_API_URL || '/api/v1';
-      const response = await fetch(`${apiUrl}/media/${id}`);
+      // Ensure the ID is properly URL encoded for API requests
+      // This is important for Base64 IDs containing +, / and = characters
+      const encodedId = encodeURIComponent(id);
+
+      console.log('Fetching media data using API URL:', apiBaseUrl);
+      console.log('Media ID:', id);
+      console.log('URL-encoded Media ID:', encodedId);
+
+      const response = await fetch(`${apiBaseUrl}/media/${encodedId}`);
 
       if (!response.ok) {
         throw new Error(`Error fetching media: ${response.statusText}`);
       }
 
       const data = await response.json();
+      console.log('Media data received:', data);
       setMediaData(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error fetching media');
