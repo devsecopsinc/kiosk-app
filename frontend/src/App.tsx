@@ -32,61 +32,8 @@ const getConfig = async (): Promise<AppConfig> => {
     return { ...defaultConfig, apiUrl: metaApiUrl };
   }
 
-  // Determine API URL based on environment
-  const hostname = window.location.hostname;
-  const protocol = window.location.protocol;
-  let apiUrl = defaultConfig.apiUrl;
-
-  if (hostname.includes('localhost') || hostname.includes('127.0.0.1')) {
-    // Local development - use relative path
-    console.log('Development environment detected, using relative API path');
-  } else if (hostname.includes('cloudfront')) {
-    console.log('CloudFront deployment detected');
-
-    // First try the same domain with /api/v1 path (most common setup)
-    try {
-      console.log('Trying API at same domain with /api/v1 path');
-      const testResponse = await fetch(`${protocol}//${hostname}/api/v1`);
-
-      // Check if the response is JSON, not HTML
-      const contentType = testResponse.headers.get('content-type');
-      if (testResponse.ok && contentType && contentType.includes('application/json')) {
-        apiUrl = `/api/v1`;
-        console.log('Successfully detected API at same domain');
-        return { ...defaultConfig, apiUrl };
-      } else {
-        console.log('API not found at same domain, response was not JSON');
-      }
-    } catch (error) {
-      console.log('Error testing API at same domain:', error);
-    }
-
-    // Try with separate API subdomain (api.*)
-    try {
-      // Extract distribution ID from hostname
-      const cfId = hostname.split('.')[0];
-      console.log('CloudFront distribution ID:', cfId);
-
-      const apiHostname = hostname.replace(cfId, 'api');
-      const testUrl = `${protocol}//${apiHostname}/api/v1`;
-
-      console.log('Trying to detect API URL at:', testUrl);
-      const testResponse = await fetch(testUrl);
-
-      // Check if the response is JSON, not HTML
-      const contentType = testResponse.headers.get('content-type');
-      if (testResponse.ok && contentType && contentType.includes('application/json')) {
-        apiUrl = testUrl;
-        console.log('Successfully detected API URL:', apiUrl);
-        return { ...defaultConfig, apiUrl };
-      }
-    } catch (error) {
-      console.log('Could not auto-detect API URL on separate domain, falling back to relative path');
-    }
-  }
-
-  console.log('Using API URL:', apiUrl);
-  return { ...defaultConfig, apiUrl };
+  console.log('Using default API URL:', defaultConfig.apiUrl);
+  return defaultConfig;
 };
 
 interface MediaMetadata {
