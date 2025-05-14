@@ -48,12 +48,18 @@ def convert_dynamodb_item(item: Dict[str, Any]) -> Dict[str, Any]:
     else:
         return item
 
-def generate_presigned_url(bucket: str, key: str, operation: str, expires_in: int = 3600) -> str:
+def generate_presigned_url(bucket: str, key: str, operation: str, expires_in: int = 3600, response_headers: Dict[str, str] = None) -> str:
     """Generate a presigned URL for S3 operations."""
     try:
+        params = {'Bucket': bucket, 'Key': key}
+        
+        # Add response headers if provided
+        if response_headers:
+            params.update(response_headers)
+            
         url = s3.generate_presigned_url(
             ClientMethod=operation,
-            Params={'Bucket': bucket, 'Key': key},
+            Params=params,
             ExpiresIn=expires_in
         )
         return url
@@ -230,7 +236,8 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             download_url = generate_presigned_url(
                 MEDIA_BUCKET,
                 f"media/{media_id}/{item['file_name']}",
-                'get_object'
+                'get_object',
+                response_headers={'ResponseContentType': item['content_type']}
             )
             
             return {
@@ -282,15 +289,27 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 }
             
             item = response['Items'][0]
-            download_url = generate_presigned_url(
-                MEDIA_BUCKET,
-                f"media/{media_id}/{item['file_name']}",
-                'get_object',
-                expires_in=7*24*3600  # 7 days
-            )
             
-            qr_code = generate_qr_code(download_url)
-            mapping = create_qr_mapping(media_id, download_url, expires_at)
+            # Check if frontend URL is provided, otherwise use direct S3 link
+            frontend_url = body.get('frontend_url', '')
+            
+            if frontend_url:
+                # Use the frontend URL for QR code
+                url_to_use = frontend_url
+                logger.info(f"Using frontend URL for QR code: {url_to_use}")
+            else:
+                # Use direct S3 download link
+                url_to_use = generate_presigned_url(
+                    MEDIA_BUCKET,
+                    f"media/{media_id}/{item['file_name']}",
+                    'get_object',
+                    expires_in=7*24*3600,  # 7 days
+                    response_headers={'ResponseContentType': item['content_type']}
+                )
+                logger.info(f"Using direct S3 URL for QR code: {url_to_use}")
+            
+            qr_code = generate_qr_code(url_to_use)
+            mapping = create_qr_mapping(media_id, url_to_use, expires_at)
             
             return {
                 'statusCode': 200,
