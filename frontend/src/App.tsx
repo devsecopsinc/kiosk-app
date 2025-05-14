@@ -140,13 +140,12 @@ const App: React.FC = () => {
     setError(null);
 
     try {
-      // Ensure the ID is properly URL encoded for API requests
-      // This is important for Base64 IDs containing +, / and = characters
+      // With UUID format there should be no special characters,
+      // but we'll still use encodeURIComponent for safety
       const encodedId = encodeURIComponent(id);
 
       console.log('Fetching media data using API URL:', apiBaseUrl);
       console.log('Media ID:', id);
-      console.log('URL-encoded Media ID:', encodedId);
 
       const response = await fetch(`${apiBaseUrl}/media/${encodedId}`);
 
