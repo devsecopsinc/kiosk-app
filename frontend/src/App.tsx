@@ -147,7 +147,13 @@ const App: React.FC = () => {
       console.log('Fetching media data using API URL:', apiBaseUrl);
       console.log('Media ID:', id);
 
-      const response = await fetch(`${apiBaseUrl}/media/${encodedId}`);
+      // Ensure the API base URL is properly formatted
+      const normalizedApiUrl = apiBaseUrl.startsWith('http')
+        ? apiBaseUrl
+        : `${window.location.origin}${apiBaseUrl}`;
+
+      console.log('Using normalized API URL:', normalizedApiUrl);
+      const response = await fetch(`${normalizedApiUrl}/media/${encodedId}`);
 
       if (!response.ok) {
         throw new Error(`Error fetching media: ${response.statusText}`);

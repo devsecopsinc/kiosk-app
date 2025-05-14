@@ -360,9 +360,19 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             frontend_url = body.get('frontend_url', '')
             
             if frontend_url:
-                # Use the frontend URL for QR code
-                url_to_use = frontend_url
-                logger.info(f"Using frontend URL for QR code: {url_to_use}")
+                # Ensure the URL has a trailing slash before query parameters
+                if '?' in frontend_url:
+                    base_url, query_part = frontend_url.split('?', 1)
+                    if not base_url.endswith('/'):
+                        base_url = f"{base_url}/"
+                    url_to_use = f"{base_url}?{query_part}"
+                else:
+                    if not frontend_url.endswith('/'):
+                        url_to_use = f"{frontend_url}/"
+                    else:
+                        url_to_use = frontend_url
+                        
+                logger.info(f"Using normalized frontend URL for QR code: {url_to_use}")
             else:
                 # Use direct S3 download link
                 # Use stored file_path if available, otherwise generate path
