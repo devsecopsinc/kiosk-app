@@ -215,9 +215,9 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 path = f"/api/v1/{proxy_param}"
                 logger.info(f"Updated path using proxy parameter: {path}")
         
-        # Специальная проверка для точного пути /api/v1
-        if path == '/api/v1' or path.endswith('/api/v1'):
-            logger.info(f"Exact /api/v1 path detected, avoiding path conversion")
+        # Для точного пути /api/v1 или вариаций, обрабатываем здесь до преобразования путей
+        if method == 'GET' and (path == '/api/v1' or path == '/api/v1/' or path.rstrip('/') == '/api/v1'):
+            logger.info(f"Exact /api/v1 path detected, avoiding path conversion: {path}")
             return {
                 'statusCode': 200,
                 'headers': {
@@ -235,6 +235,17 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                     'version': '1.0'
                 })
             }
+        
+        # Проверка и детекция дублирования пути /api/v1
+        if path.endswith('/api/v1/v1'):
+            logger.info(f"Detected path duplication: {path}, fixing")
+            path = path.replace('/api/v1/v1', '/api/v1')
+            logger.info(f"Fixed path: {path}")
+            
+        # For CloudFront routing to API Gateway through /api/v1/*
+        if path.startswith('/api/') and not path.startswith('/api/v1/'):
+            logger.info(f"Converting API path: {path} to include v1")
+            path = path.replace('/api/', '/api/v1/')
         
         # Normalize the path
         normalized_path = normalize_path(path)
