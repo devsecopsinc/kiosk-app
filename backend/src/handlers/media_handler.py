@@ -215,10 +215,26 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 path = f"/api/v1/{proxy_param}"
                 logger.info(f"Updated path using proxy parameter: {path}")
         
-        # For CloudFront routing to API Gateway through /api/v1/*
-        if path.startswith('/api/') and not path.startswith('/api/v1/'):
-            logger.info(f"Converting API path: {path} to include v1")
-            path = path.replace('/api/', '/api/v1/')
+        # Специальная проверка для точного пути /api/v1
+        if path == '/api/v1' or path.endswith('/api/v1'):
+            logger.info(f"Exact /api/v1 path detected, avoiding path conversion")
+            return {
+                'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*',
+                    'Cache-Control': 'no-cache, no-store, must-revalidate'
+                },
+                'body': json.dumps({
+                    'message': 'Kiosk Media API v1',
+                    'endpoints': {
+                        'GET /api/v1/media/{id}': 'Get media information and download URL',
+                        'POST /api/v1/media': 'Generate upload URL for media',
+                        'POST /api/v1/qr': 'Generate QR code for media'
+                    },
+                    'version': '1.0'
+                })
+            }
         
         # Normalize the path
         normalized_path = normalize_path(path)
@@ -245,25 +261,6 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                         'GET /media/{id}': 'Get media by ID',
                         'POST /media': 'Create new media upload URL',
                         'POST /qr': 'Generate QR code for media'
-                    },
-                    'version': '1.0'
-                })
-            }
-        
-        # Specific handler for '/api/v1' endpoint for test compatibility
-        elif method == 'GET' and path == '/api/v1':
-            return {
-                'statusCode': 200,
-                'headers': {
-                    'Content-Type': 'application/json',
-                    'Access-Control-Allow-Origin': '*'
-                },
-                'body': json.dumps({
-                    'message': 'Kiosk Media API v1',
-                    'endpoints': {
-                        'GET /api/v1/media/{id}': 'Get media information and download URL',
-                        'POST /api/v1/media': 'Generate upload URL for media',
-                        'POST /api/v1/qr': 'Generate QR code for media'
                     },
                     'version': '1.0'
                 })
