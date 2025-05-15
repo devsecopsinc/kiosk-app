@@ -250,6 +250,25 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 })
             }
         
+        # Specific handler for '/api/v1' endpoint for test compatibility
+        elif method == 'GET' and path == '/api/v1':
+            return {
+                'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({
+                    'message': 'Kiosk Media API v1',
+                    'endpoints': {
+                        'GET /api/v1/media/{id}': 'Get media information and download URL',
+                        'POST /api/v1/media': 'Generate upload URL for media',
+                        'POST /api/v1/qr': 'Generate QR code for media'
+                    },
+                    'version': '1.0'
+                })
+            }
+        
         # Handle media upload request
         if method == 'POST' and base_path == '/media':
             body = json.loads(event['body']) if event.get('body') else {}
