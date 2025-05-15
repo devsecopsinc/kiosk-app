@@ -370,7 +370,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                     if not frontend_url.endswith('/'):
                         url_to_use = f"{frontend_url}/"
                     else:
-                        url_to_use = frontend_url
+                url_to_use = frontend_url
                         
                 logger.info(f"Using normalized frontend URL for QR code: {url_to_use}")
             else:

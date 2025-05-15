@@ -1,85 +1,75 @@
 import React, { useEffect, useState } from 'react';
 
-// Configuration types
-interface AppConfig {
-  apiUrl: string;
+// Define interfaces for component props and state
+interface MediaData {
+  mediaId: string;
+  url: string;
+  contentType: string;
+  filename: string;
+  createdAt: string;
 }
 
-// Get configuration from different sources
-const getConfig = async (): Promise<AppConfig> => {
-  // Default values
-  const defaultConfig: AppConfig = {
-    apiUrl: '/api/v1'
-  };
-
-  try {
-    // Try to load config.json which may be generated during deployment
-    const configResponse = await fetch('/config.json');
-    if (configResponse.ok) {
-      const configData = await configResponse.json();
-      console.log('Loaded config from config.json:', configData);
-      return { ...defaultConfig, ...configData };
-    }
-  } catch (err) {
-    console.log('Could not load config.json, using environment detection');
-  }
-
-  // Try to get API URL from meta tag first (highest priority)
-  const apiUrlMeta = document.querySelector('meta[name="api-url"]');
-  if (apiUrlMeta && apiUrlMeta.getAttribute('content')) {
-    const metaApiUrl = apiUrlMeta.getAttribute('content') || '';
-    console.log('Found API URL in meta tag:', metaApiUrl);
-    return { ...defaultConfig, apiUrl: metaApiUrl };
-  }
-
-  console.log('Using default API URL:', defaultConfig.apiUrl);
-  return defaultConfig;
+type Config = {
+  apiBaseUrl: string;
 };
 
-interface MediaMetadata {
-  file_name: string;
-  content_type: string;
-  user_id: string;
-  created_at: string;
-  expires_at: number;
-  status: string;
-}
-
-interface MediaResponse {
-  download_url: string;
-  metadata: MediaMetadata;
-}
-
-const App: React.FC = () => {
-  const [mediaId, setMediaId] = useState<string | null>(null);
-  const [mediaData, setMediaData] = useState<MediaResponse | null>(null);
-  const [loading, setLoading] = useState<boolean>(false);
+// Main App component
+function App() {
+  // State for media data and loading state
+  const [mediaData, setMediaData] = useState<MediaData | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [config, setConfig] = useState<AppConfig | null>(null);
+
+  // Get configuration from different sources
+  const getConfig = async (): Promise<Config> => {
+    console.log('Initializing app config');
+
+    try {
+      // Try loading config from config.json
+      const configResponse = await fetch('/config.json');
+      if (configResponse.ok) {
+        const config = await configResponse.json();
+        console.log('Loaded config:', config);
+        return config;
+      }
+    } catch (error) {
+      console.warn('Failed to load config.json:', error);
+    }
+
+    // Default config
+    return {
+      apiBaseUrl: '/api/v1'
+    };
+  };
 
   useEffect(() => {
-    // Load configuration when the application starts
-    const loadConfig = async () => {
+    const loadMediaFromUrl = async () => {
+      setLoading(true);
+      setError(null);
+
       try {
         const appConfig = await getConfig();
-        setConfig(appConfig);
         console.log('App configuration loaded:', appConfig);
 
-        // After loading configuration, check ID in URL
+        // Check if media ID is in URL
         const urlParams = new URLSearchParams(window.location.search);
         const id = urlParams.get('id');
+        console.log('Media ID from URL:', id);
 
         if (id) {
-          setMediaId(id);
-          fetchMediaData(id, appConfig.apiUrl);
+          fetchMediaData(id, appConfig.apiBaseUrl);
+        } else {
+          setLoading(false);
+          setError('No media ID provided');
         }
       } catch (err) {
-        console.error('Error loading configuration:', err);
-        setError('Failed to load application configuration');
+        console.error('Error loading media from URL:', err);
+        setLoading(false);
+        setError('Failed to initialize app');
       }
     };
 
-    loadConfig();
+    loadMediaFromUrl();
   }, []);
 
   const fetchMediaData = async (id: string, apiBaseUrl: string) => {
@@ -94,24 +84,23 @@ const App: React.FC = () => {
       console.log('Fetching media data using API URL:', apiBaseUrl);
       console.log('Media ID:', id);
 
-      // Ensure the API base URL is properly formatted
-      const normalizedApiUrl = apiBaseUrl.startsWith('http')
-        ? apiBaseUrl
-        : `${window.location.origin}${apiBaseUrl}`;
+      // Use relative path if apiBaseUrl starts with slash, otherwise use full URL
+      const apiUrl = apiBaseUrl.startsWith('/')
+        ? `${window.location.origin}${apiBaseUrl}`
+        : apiBaseUrl;
 
-      console.log('Using normalized API URL:', normalizedApiUrl);
-      const response = await fetch(`${normalizedApiUrl}/media/${encodedId}`);
+      console.log('Using API URL:', apiUrl);
+      const response = await fetch(`${apiUrl}/media/${encodedId}`);
 
       if (!response.ok) {
-        throw new Error(`Error fetching media: ${response.statusText}`);
+        throw new Error(`HTTP error! Status: ${response.status}`);
       }
 
       const data = await response.json();
-      console.log('Media data received:', data);
       setMediaData(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error fetching media');
-      console.error('Error fetching media:', err);
+      console.error('Error fetching media data:', err);
+      setError('Failed to fetch');
     } finally {
       setLoading(false);
     }
@@ -120,21 +109,20 @@ const App: React.FC = () => {
   const renderMedia = () => {
     if (!mediaData) return null;
 
-    const { download_url, metadata } = mediaData;
-    const { content_type, file_name } = metadata;
+    const { url, contentType, filename } = mediaData;
 
     // Check if it's an image type
-    const isImage = content_type.startsWith('image/');
+    const isImage = contentType.startsWith('image/');
 
     return (
       <div style={{ marginTop: '20px', width: '100%', maxWidth: '800px' }}>
-        <h2>{file_name}</h2>
+        <h2>{filename}</h2>
 
         {isImage && (
           <div style={{ margin: '20px 0' }}>
             <img
-              src={download_url}
-              alt={file_name}
+              src={url}
+              alt={filename}
               style={{ maxWidth: '100%', maxHeight: '500px' }}
             />
           </div>
@@ -142,8 +130,8 @@ const App: React.FC = () => {
 
         <div style={{ marginTop: '20px' }}>
           <a
-            href={download_url}
-            download={file_name}
+            href={url}
+            download={filename}
             style={{
               backgroundColor: '#4CAF50',
               color: 'white',
@@ -154,7 +142,7 @@ const App: React.FC = () => {
               display: 'inline-block'
             }}
           >
-            Download {file_name}
+            Download {filename}
           </a>
         </div>
       </div>
@@ -173,7 +161,7 @@ const App: React.FC = () => {
     }}>
       <h1>Media Sharing App</h1>
 
-      {!mediaId && (
+      {!mediaData && (
         <p>No media ID provided. Please scan a QR code or use a direct link to access media.</p>
       )}
 
@@ -188,6 +176,6 @@ const App: React.FC = () => {
       {renderMedia()}
     </div>
   );
-};
+}
 
 export default App; 
