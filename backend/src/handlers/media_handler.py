@@ -145,16 +145,27 @@ def normalize_path(path: str) -> str:
     # /api/v1/media or /media depending on configuration
     if path.startswith('/api/v1/'):
         # Path like /api/v1/media -> /media
-        path = '/' + path[8:]
+        normalized = '/' + path[8:]
+        logger.info(f"Path starts with /api/v1/ - normalized to: {normalized}")
+        return normalized
     elif path == '/api/v1' or path == '/api/v1/':
         # If it's just the API root without additional path, use root
-        path = '/'
+        logger.info(f"Path is API root - normalized to: /")
+        return '/'
+    elif path.startswith('/api/'):
+        # Handle /api/media pattern
+        normalized = '/' + path[5:]
+        logger.info(f"Path starts with /api/ - normalized to: {normalized}")
+        return normalized
     
-    # Also handle proxy path parameter
-    if 'proxy' in path:
-        path = '/' + path.replace('proxy', '').strip('/')
+    # Handle proxy path parameter if present
+    if path.startswith('/proxy/') or path.startswith('/proxy'):
+        normalized = '/' + path.replace('/proxy', '').strip('/')
+        logger.info(f"Path contains proxy prefix - normalized to: {normalized}")
+        return normalized
     
-    logger.info(f"Normalized path: {path}")
+    # If the path is already clean (e.g., /media), return as is
+    logger.info(f"Path appears to be already normalized: {path}")
     return path
 
 def extract_path_param(path: str, resource: str) -> str:
@@ -202,10 +213,16 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             # If path is empty but we have a proxy param, use it
             if not path or path == '/api/v1':
                 path = f"/api/v1/{proxy_param}"
+                logger.info(f"Updated path using proxy parameter: {path}")
+        
+        # For CloudFront routing to API Gateway through /api/v1/*
+        if path.startswith('/api/') and not path.startswith('/api/v1/'):
+            logger.info(f"Converting API path: {path} to include v1")
+            path = path.replace('/api/', '/api/v1/')
         
         # Normalize the path
         normalized_path = normalize_path(path)
-        logger.info(f"Normalized path: {normalized_path}")
+        logger.info(f"Normalized path from {path} to {normalized_path}")
         
         # Extract the base path and ID if present
         path_parts = normalized_path.strip('/').split('/')
@@ -213,6 +230,25 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         path_id = path_parts[1] if len(path_parts) > 1 else None
         
         logger.info(f"Base path: {base_path}, Path ID: {path_id}")
+        
+        # API Root path handling - list available endpoints
+        if (method == 'GET' and (normalized_path == '/' or normalized_path == '')):
+            return {
+                'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({
+                    'message': 'Kiosk Media API',
+                    'endpoints': {
+                        'GET /media/{id}': 'Get media by ID',
+                        'POST /media': 'Create new media upload URL',
+                        'POST /qr': 'Generate QR code for media'
+                    },
+                    'version': '1.0'
+                })
+            }
         
         # Handle media upload request
         if method == 'POST' and base_path == '/media':
@@ -370,8 +406,8 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                     if not frontend_url.endswith('/'):
                         url_to_use = f"{frontend_url}/"
                     else:
-                url_to_use = frontend_url
-                        
+                        url_to_use = frontend_url
+                
                 logger.info(f"Using normalized frontend URL for QR code: {url_to_use}")
             else:
                 # Use direct S3 download link
@@ -451,26 +487,6 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 'body': json.dumps(convert_dynamodb_item(item))
             }
         
-        # Root API path - return available endpoints
-        elif method == 'GET' and (normalized_path == '/' or normalized_path == ''):
-            return {
-                'statusCode': 200,
-                'headers': {
-                    'Content-Type': 'application/json',
-                    'Access-Control-Allow-Origin': '*'
-                },
-                'body': json.dumps({
-                    'message': 'Kiosk Media API',
-                    'version': '1.0',
-                    'endpoints': {
-                        'POST /api/v1/media': 'Generate upload URL for media',
-                        'GET /api/v1/media/{id}': 'Get media information and download URL',
-                        'POST /api/v1/qr': 'Generate QR code for media',
-                        'GET /api/v1/qr/{code}': 'Lookup QR code mapping'
-                    }
-                })
-            }
-            
         else:
             logger.warning(f"Path not found: {path} (normalized: {normalized_path})")
             return {
