@@ -11,6 +11,8 @@ interface MediaData {
 
 type Config = {
   apiBaseUrl: string;
+  environment?: string;
+  apiKey?: string;
 };
 
 // Main App component
@@ -90,14 +92,36 @@ function App() {
         : apiBaseUrl;
 
       console.log('Using API URL:', apiUrl);
-      const response = await fetch(`${apiUrl}/media/${encodedId}`);
+
+      // Get config to access API key
+      const appConfig = await getConfig();
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json'
+      };
+
+      // Add API key if available
+      if (appConfig.apiKey) {
+        console.log('Using API key from configuration');
+        headers['x-api-key'] = appConfig.apiKey;
+      }
+
+      const response = await fetch(`${apiUrl}/media/${encodedId}`, {
+        headers
+      });
 
       if (!response.ok) {
         throw new Error(`HTTP error! Status: ${response.status}`);
       }
 
       const data = await response.json();
-      setMediaData(data);
+      // Преобразуем ответ API в формат, ожидаемый компонентом
+      setMediaData({
+        mediaId: id,
+        url: data.download_url,
+        contentType: data.metadata.content_type,
+        filename: data.metadata.file_name,
+        createdAt: data.metadata.created_at
+      });
     } catch (err) {
       console.error('Error fetching media data:', err);
       setError('Failed to fetch');
