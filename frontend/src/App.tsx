@@ -12,7 +12,6 @@ interface MediaData {
 type Config = {
   apiBaseUrl: string;
   environment?: string;
-  apiKey?: string;
 };
 
 // Main App component
@@ -99,12 +98,6 @@ function App() {
         'Content-Type': 'application/json'
       };
 
-      // Add API key if available
-      if (appConfig.apiKey) {
-        console.log('Using API key from configuration');
-        headers['x-api-key'] = appConfig.apiKey;
-      }
-
       const response = await fetch(`${apiUrl}/media/${encodedId}`, {
         headers
       });
@@ -114,7 +107,7 @@ function App() {
       }
 
       const data = await response.json();
-      // Преобразуем ответ API в формат, ожидаемый компонентом
+      // Transform API response to the format expected by the component
       setMediaData({
         mediaId: id,
         url: data.download_url,
