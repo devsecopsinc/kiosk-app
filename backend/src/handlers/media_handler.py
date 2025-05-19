@@ -3,7 +3,7 @@ import os
 import logging
 import boto3
 import uuid
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 import qrcode
 from io import BytesIO
@@ -31,11 +31,20 @@ media_table = dynamodb.Table(MEDIA_TABLE)
 user_table = dynamodb.Table(USER_TABLE)
 qr_mapping_table = dynamodb.Table(QR_MAPPING_TABLE)
 
+class ThemeOptions(BaseModel):
+    background_color: Optional[str] = Field(default=None)
+    text_color: Optional[str] = Field(default=None)
+    accent_color: Optional[str] = Field(default=None)
+    header_text: Optional[str] = Field(default=None)
+    logo_url: Optional[str] = Field(default=None)
+    custom_css: Optional[str] = Field(default=None)
+
 class MediaMetadata(BaseModel):
     file_name: str
     content_type: str
     user_id: str = Field(default="anonymous")
     expires_at: int = Field(default_factory=lambda: int((datetime.now() + timedelta(days=30)).timestamp()))
+    theme_options: Optional[ThemeOptions] = Field(default=None)
 
 def convert_dynamodb_item(item: Dict[str, Any]) -> Dict[str, Any]:
     """Convert DynamoDB types to JSON serializable types."""
@@ -112,6 +121,12 @@ def store_media_metadata(metadata: MediaMetadata, media_id: str) -> Dict[str, An
             'expires_at': metadata.expires_at,
             'status': 'active'
         }
+        
+        # Add theme options if provided
+        if metadata.theme_options:
+            theme_dict = metadata.theme_options.dict(exclude_none=True)
+            if theme_dict:
+                item['theme_options'] = theme_dict
         
         media_table.put_item(Item=item)
         return item
@@ -280,8 +295,19 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         # Handle media upload request
         if method == 'POST' and base_path == '/media':
             body = json.loads(event['body']) if event.get('body') else {}
+            
+            # Extract theme options if provided
+            theme_options = None
+            if 'theme_options' in body:
+                theme_data = body.pop('theme_options', {})
+                theme_options = ThemeOptions(**theme_data)
+            
             metadata = MediaMetadata(**body)
             
+            # Apply theme options if provided
+            if theme_options:
+                metadata.theme_options = theme_options
+                
             # Strip any path from the filename - only use basename
             file_name = os.path.basename(metadata.file_name)
             metadata.file_name = file_name
