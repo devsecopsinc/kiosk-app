@@ -24,6 +24,8 @@ type Config = {
   themesDirectory?: string;
   defaultTheme?: string;
   environment?: string;
+  defaultLogoUrl?: string;
+  headerText?: string;
 };
 
 // Main App component
@@ -34,28 +36,43 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [themeOptions, setThemeOptions] = useState<ThemeOptions>({});
   const [config, setConfig] = useState<Config>({ apiBaseUrl: '/api/v1' });
+  const [fallbackLogoUrl, setFallbackLogoUrl] = useState<string | null>(null);
 
   // Get configuration from different sources
   const getConfig = async (): Promise<Config> => {
     console.log('Initializing app config');
 
+    // Default configuration
+    const defaultConfig: Config = {
+      apiBaseUrl: '/api/v1',
+      themesDirectory: 'themes',
+      defaultTheme: 'corporate',
+      defaultLogoUrl: process.env.REACT_APP_DEFAULT_LOGO_URL || undefined,
+      headerText: process.env.REACT_APP_HEADER_TEXT || undefined
+    };
+
     try {
-      // Try loading config from config.json
       const configResponse = await fetch('/config.json');
       if (configResponse.ok) {
         const config = await configResponse.json();
         console.log('Loaded config:', config);
+
+        // Установить fallback URL логотипа, если есть в конфиге
+        if (config.defaultLogoUrl) {
+          setFallbackLogoUrl(config.defaultLogoUrl);
+        } else if (defaultConfig.defaultLogoUrl) {
+          setFallbackLogoUrl(defaultConfig.defaultLogoUrl);
+        }
+
         setConfig(config);
-        return config;
+        return { ...defaultConfig, ...config };
       }
     } catch (error) {
-      console.warn('Failed to load config.json:', error);
+      console.warn('Failed to load config:', error);
     }
 
-    // Default config
-    return {
-      apiBaseUrl: '/api/v1'
-    };
+    // Return default config if loading fails
+    return defaultConfig;
   };
 
   // Load theme from themes directory
@@ -226,6 +243,41 @@ function App() {
     return styles;
   };
 
+  // Получение URL логотипа с проверкой валидности
+  const getLogoUrl = (): string | null => {
+    // Проверяем URL логотипа из темы
+    if (themeOptions.logo_url) {
+      // Проверяем, является ли URL действительным
+      try {
+        const url = new URL(themeOptions.logo_url);
+        return themeOptions.logo_url;
+      } catch (e) {
+        console.warn('Invalid logo URL in theme options:', themeOptions.logo_url);
+        // Если URL невалидный и начинается с /, считаем его относительным
+        if (themeOptions.logo_url.startsWith('/')) {
+          return `${window.location.origin}${themeOptions.logo_url}`;
+        }
+      }
+    }
+
+    // Возвращаем fallback URL или null, если он пустой
+    return fallbackLogoUrl && fallbackLogoUrl !== "" ? fallbackLogoUrl : null;
+  };
+
+  // Получить текст заголовка
+  const getHeaderText = (): string => {
+    // Приоритет: 1. из URL, 2. из themeOptions, 3. из config.headerText, 4. дефолтный текст
+    if (themeOptions.header_text) {
+      return themeOptions.header_text;
+    }
+
+    if (config.headerText && config.headerText !== "") {
+      return config.headerText;
+    }
+
+    return 'Media Sharing App';
+  };
+
   const renderMedia = () => {
     if (!mediaData) return null;
 
@@ -276,13 +328,13 @@ function App() {
 
   return (
     <div style={getThemeStyles()}>
-      {themeOptions.logo_url && (
+      {getLogoUrl() && (
         <div style={{ marginBottom: '20px' }}>
-          <img src={themeOptions.logo_url} alt="Logo" style={{ maxHeight: '100px' }} />
+          <img src={getLogoUrl() || ''} alt="Logo" style={{ maxHeight: '100px' }} />
         </div>
       )}
 
-      <h1>{themeOptions.header_text || 'Media Sharing App'}</h1>
+      <h1>{getHeaderText()}</h1>
 
       {!mediaData && (
         <p>No media ID provided. Please scan a QR code or use a direct link to access media.</p>

@@ -3,6 +3,6 @@
   "text_color": "#2c3e50",
   "accent_color": "#3498db",
   "header_text": "Corporate Media Portal",
-  "logo_url": "https://via.placeholder.com/200x50?text=Company+Logo",
+  "logo_url": "https://devsecopsinc.io/static/media/devsecops_logo.723936c95af41eaa37cf.png",
   "custom_css": ".download-button { box-shadow: 0 2px 5px rgba(0,0,0,0.2); transition: all 0.3s; } .download-button:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.2); }"
 }

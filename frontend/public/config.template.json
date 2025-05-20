@@ -1,0 +1,7 @@
+{
+  "apiBaseUrl": "/api/v1",
+  "themesDirectory": "themes",
+  "defaultTheme": "${DefaultTheme}",
+  "defaultLogoUrl": "${DefaultLogoUrl}",
+  "headerText": "${HeaderText}"
+}

@@ -230,7 +230,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 path = f"/api/v1/{proxy_param}"
                 logger.info(f"Updated path using proxy parameter: {path}")
         
-        # Для точного пути /api/v1 или вариаций, обрабатываем здесь до преобразования путей
+        # For exact /api/v1 path or variations, process here before path transformations
         if method == 'GET' and (path == '/api/v1' or path == '/api/v1/' or path.rstrip('/') == '/api/v1'):
             logger.info(f"Exact /api/v1 path detected, avoiding path conversion: {path}")
             return {
@@ -251,7 +251,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 })
             }
         
-        # Проверка и детекция дублирования пути /api/v1
+        # Check and detect duplication of /api/v1 path
         if path.endswith('/api/v1/v1'):
             logger.info(f"Detected path duplication: {path}, fixing")
             path = path.replace('/api/v1/v1', '/api/v1')
