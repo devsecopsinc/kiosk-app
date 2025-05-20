@@ -46,50 +46,82 @@ function App() {
     const defaultConfig: Config = {
       apiBaseUrl: '/api/v1',
       themesDirectory: 'themes',
-      defaultTheme: 'corporate',
-      defaultLogoUrl: process.env.REACT_APP_DEFAULT_LOGO_URL || undefined,
-      headerText: process.env.REACT_APP_HEADER_TEXT || undefined
+      defaultTheme: 'default',
+      defaultLogoUrl: undefined,
+      headerText: undefined
     };
 
     try {
+      console.log('Attempting to load config.json...');
       const configResponse = await fetch('/config.json');
       if (configResponse.ok) {
-        const config = await configResponse.json();
-        console.log('Loaded config:', config);
+        const configData = await configResponse.json();
+        console.log('✅ Loaded config.json successfully:', configData);
 
-        // Установить fallback URL логотипа, если есть в конфиге
-        if (config.defaultLogoUrl) {
-          setFallbackLogoUrl(config.defaultLogoUrl);
-        } else if (defaultConfig.defaultLogoUrl) {
-          setFallbackLogoUrl(defaultConfig.defaultLogoUrl);
+        // Explicit check for logo URL and header text in config
+        if (configData.defaultLogoUrl) {
+          console.log('Found logo URL in config:', configData.defaultLogoUrl);
+          setFallbackLogoUrl(configData.defaultLogoUrl);
         }
 
-        setConfig(config);
-        return { ...defaultConfig, ...config };
+        // Apply config to our state
+        setConfig(configData);
+
+        // Return merged config
+        return { ...defaultConfig, ...configData };
+      } else {
+        console.warn('Failed to load config.json, status:', configResponse.status);
       }
     } catch (error) {
-      console.warn('Failed to load config:', error);
+      console.error('Error loading config.json:', error);
     }
 
     // Return default config if loading fails
+    console.warn('Using default configuration');
     return defaultConfig;
   };
 
-  // Load theme from themes directory
-  const loadTheme = async (themeName: string) => {
-    if (!config.themesDirectory) return null;
+  // Load theme based on configuration
+  const loadTheme = async (themeValue: string): Promise<ThemeOptions | null> => {
+    console.log('Loading theme, source value:', themeValue);
 
+    // Проверяем, является ли themeValue URL-адресом
+    let isUrl = false;
     try {
-      const themeResponse = await fetch(`/${config.themesDirectory}/${themeName}.json`);
-      if (themeResponse.ok) {
-        const themeData = await themeResponse.json();
-        console.log(`Loaded theme ${themeName}:`, themeData);
-        return themeData;
-      }
-    } catch (error) {
-      console.warn(`Failed to load theme ${themeName}:`, error);
+      new URL(themeValue);
+      isUrl = true;
+      console.log('Theme source is a URL');
+    } catch (e) {
+      console.log('Theme source is not a URL, using local theme');
     }
 
+    try {
+      let themeResponse;
+      let themeUrl;
+
+      if (isUrl) {
+        // Загружаем тему по URL
+        themeUrl = themeValue;
+        console.log(`Loading theme from external URL: ${themeUrl}`);
+      } else {
+        // Загружаем локальную тему default.json
+        themeUrl = '/themes/default.json';
+        console.log(`Loading local theme: ${themeUrl}`);
+      }
+
+      themeResponse = await fetch(themeUrl);
+      if (themeResponse.ok) {
+        const themeData = await themeResponse.json();
+        console.log('✅ Successfully loaded theme:', themeData);
+        return themeData;
+      } else {
+        console.warn(`Failed to load theme from ${themeUrl}, status:`, themeResponse.status);
+      }
+    } catch (error) {
+      console.error(`Failed to load theme: ${error}`);
+    }
+
+    console.warn('No theme loaded, returning null');
     return null;
   };
 
@@ -99,16 +131,14 @@ function App() {
       setError(null);
 
       try {
+        console.log('=== Starting application initialization ===');
         const appConfig = await getConfig();
-        console.log('App configuration loaded:', appConfig);
+        console.log('App configuration loaded and merged with defaults:', appConfig);
 
         // Check if media ID is in URL
         const urlParams = new URLSearchParams(window.location.search);
         const id = urlParams.get('id');
         console.log('Media ID from URL:', id);
-
-        // Check if theme name is in URL
-        const themeName = urlParams.get('theme') || appConfig.defaultTheme;
 
         // Extract theme options from URL parameters (highest priority)
         const urlThemeOptions: ThemeOptions = {};
@@ -119,15 +149,54 @@ function App() {
         if (urlParams.get('logoUrl')) urlThemeOptions.logo_url = urlParams.get('logoUrl') || undefined;
         if (urlParams.get('customCss')) urlThemeOptions.custom_css = urlParams.get('customCss') || undefined;
 
-        // If theme name is specified and no URL params override it, load theme from file
-        if (themeName && Object.keys(urlThemeOptions).length === 0) {
-          const themeData = await loadTheme(themeName);
-          if (themeData) {
-            setThemeOptions(themeData);
-          }
-        } else if (Object.keys(urlThemeOptions).length > 0) {
-          // Apply URL theme options (highest priority)
-          setThemeOptions(urlThemeOptions);
+        // Применение тем в порядке приоритета:
+        // 1. URL параметры
+        // 2. Кастомизация из CloudFormation
+        // 3. Базовая тема (default.json или по URL из DefaultTheme)
+
+        console.log('Loading theme based on configuration...');
+
+        // Загружаем тему на основе конфигурации
+        const themeSource = appConfig.defaultTheme || 'default';
+        console.log('Theme source (from config or default):', themeSource);
+        const baseTheme = await loadTheme(themeSource);
+
+        // CloudFormation параметры (из config.json)
+        console.log('Applying CloudFormation parameters from config.json...');
+        const configThemeOptions: ThemeOptions = {};
+
+        if (appConfig.headerText) {
+          console.log('Found headerText in config:', appConfig.headerText);
+          configThemeOptions.header_text = appConfig.headerText;
+        }
+
+        if (appConfig.defaultLogoUrl) {
+          console.log('Found defaultLogoUrl in config:', appConfig.defaultLogoUrl);
+          configThemeOptions.logo_url = appConfig.defaultLogoUrl;
+        }
+
+        // Если есть параметры URL - используем их (высший приоритет)
+        if (Object.keys(urlThemeOptions).length > 0) {
+          console.log('URL parameters detected, applying with highest priority', urlThemeOptions);
+
+          // Комбинируем базовую тему с URL параметрами
+          const finalTheme = {
+            ...(baseTheme || {}),
+            ...configThemeOptions,
+            ...urlThemeOptions
+          };
+
+          console.log('Final theme after applying URL parameters:', finalTheme);
+          setThemeOptions(finalTheme);
+        } else {
+          // Иначе используем базовую тему с настройками из CloudFormation
+          const finalTheme = {
+            ...(baseTheme || {}),
+            ...configThemeOptions
+          };
+
+          console.log('Final theme with CloudFormation parameters:', finalTheme);
+          setThemeOptions(finalTheme);
         }
 
         if (id) {
@@ -245,36 +314,55 @@ function App() {
 
   // Получение URL логотипа с проверкой валидности
   const getLogoUrl = (): string | null => {
-    // Проверяем URL логотипа из темы
+    console.log('getLogoUrl called, themeOptions:', themeOptions);
+    console.log('Fallback logo URL from config:', fallbackLogoUrl);
+
+    // Проверяем URL логотипа из темы (высший приоритет)
     if (themeOptions.logo_url) {
-      // Проверяем, является ли URL действительным
+      console.log('Found logo_url in theme options:', themeOptions.logo_url);
       try {
-        const url = new URL(themeOptions.logo_url);
+        // Проверяем валидность URL
+        new URL(themeOptions.logo_url);
+        console.log('Valid URL, returning theme logo URL');
         return themeOptions.logo_url;
       } catch (e) {
         console.warn('Invalid logo URL in theme options:', themeOptions.logo_url);
         // Если URL невалидный и начинается с /, считаем его относительным
         if (themeOptions.logo_url.startsWith('/')) {
-          return `${window.location.origin}${themeOptions.logo_url}`;
+          const fullUrl = `${window.location.origin}${themeOptions.logo_url}`;
+          console.log('Converting relative URL to absolute:', fullUrl);
+          return fullUrl;
         }
       }
     }
 
     // Возвращаем fallback URL или null, если он пустой
-    return fallbackLogoUrl && fallbackLogoUrl !== "" ? fallbackLogoUrl : null;
+    if (fallbackLogoUrl && fallbackLogoUrl !== "") {
+      console.log('Using fallback logo URL:', fallbackLogoUrl);
+      return fallbackLogoUrl;
+    }
+
+    console.log('No logo URL found, returning null');
+    return null;
   };
 
   // Получить текст заголовка
   const getHeaderText = (): string => {
-    // Приоритет: 1. из URL, 2. из themeOptions, 3. из config.headerText, 4. дефолтный текст
+    console.log('getHeaderText called, themeOptions:', themeOptions);
+    console.log('Config headerText:', config.headerText);
+
+    // Приоритет: из themeOptions, затем из конфига, потом дефолт
     if (themeOptions.header_text) {
+      console.log('Using header text from theme options:', themeOptions.header_text);
       return themeOptions.header_text;
     }
 
     if (config.headerText && config.headerText !== "") {
+      console.log('Using header text from config:', config.headerText);
       return config.headerText;
     }
 
+    console.log('Using default header text');
     return 'Media Sharing App';
   };
 
@@ -313,9 +401,22 @@ function App() {
     );
   };
 
+  // Monitor themeOptions changes
+  useEffect(() => {
+    console.log('themeOptions changed:', themeOptions);
+
+    // Recompute important values when theme changes
+    if (Object.keys(themeOptions).length > 0) {
+      const logo = getLogoUrl();
+      const header = getHeaderText();
+      console.log(`With current theme options, logo: ${logo}, header: ${header}`);
+    }
+  }, [themeOptions]);
+
   // Apply custom CSS if provided
   useEffect(() => {
     if (themeOptions.custom_css) {
+      console.log('Applying custom CSS from theme');
       const styleElement = document.createElement('style');
       styleElement.textContent = themeOptions.custom_css;
       document.head.appendChild(styleElement);
