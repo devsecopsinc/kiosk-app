@@ -1,0 +1,183 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+build/
+cdk.out/
+.cdk.staging/
+coverage/
+
+# Environment & config
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+config.json
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# CDK & AWS
+cdk-outputs.json
+
+# Virtual Environments
+venv/
+ENV/
+.env
+
+# CDK
+cdk.out/
+cdk.context.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Unity
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.tmp
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+
+# TouchDesigner
+*.toe.bak
+*.toe.debug
+*.toe.lock
+*.toe.temp
+*.toe.crash
+
+# Test artifacts
+test.txt
+downloaded_file.txt
+qr_code.png
+
+# OS specific
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# AWS
+.aws/
+.aws-sam/
+.aws-config/
+
+# Node.js / Frontend
+node_modules/
+build/
+dist/
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+coverage/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python / Backend
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+*~
+
+# AWS
+.aws-sam/
+.chalice/
+cdk.out/
+.serverless/
+
+# Temporary files
+*.tmp
+*.bak
+*.log
