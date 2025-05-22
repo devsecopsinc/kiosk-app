@@ -87,10 +87,12 @@ function App() {
       // Check if cssURLValue is a URL
       let isUrl = false;
       try {
-        new URL(cssURLValue);
-        isUrl = true;
-        console.log('CSS source is a URL');
-        cssUrl = cssURLValue; // Use external URL if valid
+        if (cssURLValue) {
+          new URL(cssURLValue);
+          isUrl = true;
+          console.log('CSS source is a URL');
+          cssUrl = cssURLValue; // Use external URL if valid
+        }
       } catch (e) {
         // If it's not a URL but has a value different from default, use it as a relative path
         if (cssURLValue && cssURLValue !== 'themes/dark.css') {
@@ -144,9 +146,6 @@ function App() {
 
   useEffect(() => {
     const loadMediaFromUrl = async () => {
-      setLoading(true);
-      setError(null);
-
       try {
         console.log('=== Starting application initialization ===');
         const appConfig = await getConfig();
@@ -223,11 +222,13 @@ function App() {
           }
         }
 
-        if (id) {
-          fetchMediaData(id, appConfig.apiBaseUrl);
-        } else {
+        // Set loading false if no media ID provided
+        if (!id) {
           setLoading(false);
           setError('No media ID provided');
+        } else {
+          // Fetch media data
+          await fetchMediaData(id, appConfig.apiBaseUrl);
         }
       } catch (err) {
         console.error('Error loading media from URL:', err);
@@ -240,9 +241,6 @@ function App() {
   }, []);
 
   const fetchMediaData = async (id: string, apiBaseUrl: string) => {
-    setLoading(true);
-    setError(null);
-
     try {
       // With UUID format there should be no special characters,
       // but we'll still use encodeURIComponent for safety
@@ -272,7 +270,18 @@ function App() {
 
       const data = await response.json();
       console.log('Media data received:', data);
-      setMediaData(data);
+
+      // Ensure we have all required fields in media data
+      const mediaDataFormatted: MediaData = {
+        mediaId: data.mediaId || id,
+        url: data.download_url || data.url || '',
+        contentType: data.contentType || data.metadata?.content_type || 'application/octet-stream',
+        filename: data.filename || data.metadata?.file_name || 'download',
+        createdAt: data.createdAt || data.metadata?.created_at || new Date().toISOString(),
+        themeOptions: data.themeOptions || {}
+      };
+
+      setMediaData(mediaDataFormatted);
 
       // Update page title from media data if available
       if (data.themeOptions?.header_text) {
@@ -335,7 +344,10 @@ function App() {
   const renderMedia = () => {
     if (!mediaData) return null;
 
-    const { contentType, url, filename } = mediaData;
+    // Ensure all required properties exist
+    const contentType = mediaData.contentType || 'application/octet-stream';
+    const url = mediaData.url || '';
+    const filename = mediaData.filename || 'file';
 
     if (contentType.startsWith('image/')) {
       return <img id="media-image" src={url} alt={filename} />;
