@@ -185,12 +185,16 @@ function App() {
         if (appConfig.pageTitle) {
           console.log('Found pageTitle in config:', appConfig.pageTitle);
           configThemeOptions.header_text = appConfig.pageTitle;
+          // Also set page title directly
+          document.title = appConfig.pageTitle;
         }
 
         if (appConfig.defaultLogoUrl) {
           console.log('Found defaultLogoUrl in config:', appConfig.defaultLogoUrl);
           configThemeOptions.logo_url = appConfig.defaultLogoUrl;
         }
+
+        console.log('Config theme options:', configThemeOptions);
 
         // If there are URL parameters, use them (highest priority)
         if (Object.keys(urlThemeOptions).length > 0) {
@@ -297,32 +301,42 @@ function App() {
   };
 
   const getLogoUrl = (): string | null => {
+    console.log('Getting logo URL. mediaData:', mediaData?.themeOptions, 'themeOptions:', themeOptions, 'fallbackLogoUrl:', fallbackLogoUrl);
+
     // If media data includes a logo_url, use that
     if (mediaData?.themeOptions?.logo_url) {
+      console.log('Using logo URL from media data:', mediaData.themeOptions.logo_url);
       return mediaData.themeOptions.logo_url;
     }
 
     // Otherwise use theme options from URL/env
     if (themeOptions.logo_url) {
+      console.log('Using logo URL from theme options:', themeOptions.logo_url);
       return themeOptions.logo_url;
     }
 
     // Fallback to default logo if configured
+    console.log('Using fallback logo URL:', fallbackLogoUrl);
     return fallbackLogoUrl;
   };
 
   const getHeaderText = (): string => {
+    console.log('Getting header text. mediaData:', mediaData?.themeOptions, 'themeOptions:', themeOptions);
+
     // If media data includes a header_text, use that
     if (mediaData?.themeOptions?.header_text) {
+      console.log('Using header text from media data:', mediaData.themeOptions.header_text);
       return mediaData.themeOptions.header_text;
     }
 
     // Otherwise use theme options from URL/env
     if (themeOptions.header_text) {
+      console.log('Using header text from theme options:', themeOptions.header_text);
       return themeOptions.header_text;
     }
 
     // Default
+    console.log('Using default header text: "Media Sharing"');
     return "Media Sharing";
   };
 
