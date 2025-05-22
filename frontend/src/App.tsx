@@ -22,10 +22,10 @@ interface MediaData {
 type Config = {
   apiBaseUrl: string;
   themesDirectory?: string;
-  defaultTheme?: string;
+  customCSSURL?: string;
   environment?: string;
   defaultLogoUrl?: string;
-  headerText?: string;
+  pageTitle?: string;
 };
 
 // Main App component
@@ -37,92 +37,109 @@ function App() {
   const [themeOptions, setThemeOptions] = useState<ThemeOptions>({});
   const [config, setConfig] = useState<Config>({ apiBaseUrl: '/api/v1' });
   const [fallbackLogoUrl, setFallbackLogoUrl] = useState<string | null>(null);
+  const [customCSSLoaded, setCustomCSSLoaded] = useState(false);
 
-  // Get configuration from different sources
+  // Get configuration from environment variables
   const getConfig = async (): Promise<Config> => {
-    console.log('Initializing app config');
+    console.log('Initializing app config from environment variables');
 
-    // Default configuration
+    // Default configuration - always use dark theme
     const defaultConfig: Config = {
       apiBaseUrl: '/api/v1',
       themesDirectory: 'themes',
-      defaultTheme: 'default',
+      customCSSURL: 'themes/dark.css', // Default to dark theme
       defaultLogoUrl: undefined,
-      headerText: undefined
+      pageTitle: undefined
     };
 
-    try {
-      console.log('Attempting to load config.json...');
-      const configResponse = await fetch('/config.json');
-      if (configResponse.ok) {
-        const configData = await configResponse.json();
-        console.log('✅ Loaded config.json successfully:', configData);
+    // Read from process.env (from .env during build)
+    const envConfig: Config = {
+      apiBaseUrl: process.env.REACT_APP_API_BASE_URL || defaultConfig.apiBaseUrl,
+      themesDirectory: process.env.REACT_APP_THEMES_DIRECTORY || defaultConfig.themesDirectory,
+      customCSSURL: process.env.REACT_APP_CUSTOM_CSS_URL || defaultConfig.customCSSURL,
+      environment: process.env.REACT_APP_ENVIRONMENT,
+      defaultLogoUrl: process.env.REACT_APP_DEFAULT_LOGO_URL || undefined,
+      pageTitle: process.env.REACT_APP_PAGE_TITLE || undefined
+    };
 
-        // Explicit check for logo URL and header text in config
-        if (configData.defaultLogoUrl) {
-          console.log('Found logo URL in config:', configData.defaultLogoUrl);
-          setFallbackLogoUrl(configData.defaultLogoUrl);
-        }
+    console.log('Configuration from environment:', envConfig);
 
-        // Apply config to our state
-        setConfig(configData);
-
-        // Return merged config
-        return { ...defaultConfig, ...configData };
-      } else {
-        console.warn('Failed to load config.json, status:', configResponse.status);
-      }
-    } catch (error) {
-      console.error('Error loading config.json:', error);
+    // Set fallback logo URL if available
+    if (envConfig.defaultLogoUrl) {
+      console.log('Found logo URL in env config:', envConfig.defaultLogoUrl);
+      setFallbackLogoUrl(envConfig.defaultLogoUrl);
     }
 
-    // Return default config if loading fails
-    console.warn('Using default configuration');
-    return defaultConfig;
+    // Apply config to our state
+    const mergedConfig = { ...defaultConfig, ...envConfig };
+    setConfig(mergedConfig);
+
+    return mergedConfig;
   };
 
-  // Load theme based on configuration
-  const loadTheme = async (themeValue: string): Promise<ThemeOptions | null> => {
-    console.log('Loading theme, source value:', themeValue);
-
-    // Проверяем, является ли themeValue URL-адресом
-    let isUrl = false;
-    try {
-      new URL(themeValue);
-      isUrl = true;
-      console.log('Theme source is a URL');
-    } catch (e) {
-      console.log('Theme source is not a URL, using local theme');
-    }
+  // Load CSS based on configuration
+  const loadCustomCSS = async (cssURLValue: string): Promise<boolean> => {
+    console.log('Loading custom CSS, source value:', cssURLValue);
 
     try {
-      let themeResponse;
-      let themeUrl;
+      let cssUrl = 'themes/dark.css'; // Default to dark theme
 
-      if (isUrl) {
-        // Загружаем тему по URL
-        themeUrl = themeValue;
-        console.log(`Loading theme from external URL: ${themeUrl}`);
-      } else {
-        // Загружаем локальную тему default.json
-        themeUrl = '/themes/default.json';
-        console.log(`Loading local theme: ${themeUrl}`);
+      // Check if cssURLValue is a URL
+      let isUrl = false;
+      try {
+        new URL(cssURLValue);
+        isUrl = true;
+        console.log('CSS source is a URL');
+        cssUrl = cssURLValue; // Use external URL if valid
+      } catch (e) {
+        // If it's not a URL but has a value different from default, use it as a relative path
+        if (cssURLValue && cssURLValue !== 'themes/dark.css') {
+          cssUrl = cssURLValue;
+          console.log('CSS source is a custom relative path:', cssUrl);
+        } else {
+          console.log('Using default dark theme CSS');
+        }
       }
 
-      themeResponse = await fetch(themeUrl);
-      if (themeResponse.ok) {
-        const themeData = await themeResponse.json();
-        console.log('✅ Successfully loaded theme:', themeData);
-        return themeData;
-      } else {
-        console.warn(`Failed to load theme from ${themeUrl}, status:`, themeResponse.status);
+      // Create a new link element
+      const linkElement = document.createElement('link');
+      linkElement.rel = 'stylesheet';
+      linkElement.href = cssUrl;
+      linkElement.id = 'custom-theme-css';
+
+      // Remove any existing custom CSS link
+      const existingLink = document.getElementById('custom-theme-css');
+      if (existingLink && existingLink.parentNode) {
+        existingLink.parentNode.removeChild(existingLink);
       }
+
+      // Add the new link to the head
+      document.head.appendChild(linkElement);
+
+      // Set up load and error event handlers
+      return new Promise((resolve) => {
+        linkElement.onload = () => {
+          console.log('✅ Successfully loaded CSS from:', cssUrl);
+          resolve(true);
+        };
+
+        linkElement.onerror = () => {
+          console.warn(`Failed to load CSS from ${cssUrl}, falling back to default dark theme`);
+          // If custom CSS fails, fall back to the default dark theme
+          if (cssUrl !== 'themes/dark.css') {
+            const fallbackLink = document.createElement('link');
+            fallbackLink.rel = 'stylesheet';
+            fallbackLink.href = 'themes/dark.css';
+            fallbackLink.id = 'custom-theme-css';
+            document.head.appendChild(fallbackLink);
+          }
+          resolve(false);
+        };
+      });
     } catch (error) {
-      console.error(`Failed to load theme: ${error}`);
+      console.error(`Failed to load CSS: ${error}`);
+      return false;
     }
-
-    console.warn('No theme loaded, returning null');
-    return null;
   };
 
   useEffect(() => {
@@ -133,7 +150,7 @@ function App() {
       try {
         console.log('=== Starting application initialization ===');
         const appConfig = await getConfig();
-        console.log('App configuration loaded and merged with defaults:', appConfig);
+        console.log('App configuration loaded:', appConfig);
 
         // Check if media ID is in URL
         const urlParams = new URLSearchParams(window.location.search);
@@ -149,25 +166,26 @@ function App() {
         if (urlParams.get('logoUrl')) urlThemeOptions.logo_url = urlParams.get('logoUrl') || undefined;
         if (urlParams.get('customCss')) urlThemeOptions.custom_css = urlParams.get('customCss') || undefined;
 
-        // Применение тем в порядке приоритета:
-        // 1. URL параметры
-        // 2. Кастомизация из CloudFormation
-        // 3. Базовая тема (default.json или по URL из DefaultTheme)
+        // Priority for styling:
+        // 1. Load the CSS file (external URL or dark.css by default)
+        // 2. Apply URL parameters if present
+        // 3. Apply environment variables from config
 
-        console.log('Loading theme based on configuration...');
+        console.log('Loading CSS based on configuration...');
 
-        // Загружаем тему на основе конфигурации
-        const themeSource = appConfig.defaultTheme || 'default';
-        console.log('Theme source (from config or default):', themeSource);
-        const baseTheme = await loadTheme(themeSource);
+        // Always load dark theme by default, unless customCSSURL is specified
+        const cssSource = appConfig.customCSSURL || 'themes/dark.css';
+        console.log('CSS source (from config or default):', cssSource);
+        const cssLoaded = await loadCustomCSS(cssSource);
+        setCustomCSSLoaded(cssLoaded);
 
-        // CloudFormation параметры (из config.json)
-        console.log('Applying CloudFormation parameters from config.json...');
+        // Environment variables (from config)
+        console.log('Applying environment variables from config...');
         const configThemeOptions: ThemeOptions = {};
 
-        if (appConfig.headerText) {
-          console.log('Found headerText in config:', appConfig.headerText);
-          configThemeOptions.header_text = appConfig.headerText;
+        if (appConfig.pageTitle) {
+          console.log('Found pageTitle in config:', appConfig.pageTitle);
+          configThemeOptions.header_text = appConfig.pageTitle;
         }
 
         if (appConfig.defaultLogoUrl) {
@@ -175,28 +193,34 @@ function App() {
           configThemeOptions.logo_url = appConfig.defaultLogoUrl;
         }
 
-        // Если есть параметры URL - используем их (высший приоритет)
+        // If there are URL parameters, use them (highest priority)
         if (Object.keys(urlThemeOptions).length > 0) {
           console.log('URL parameters detected, applying with highest priority', urlThemeOptions);
 
-          // Комбинируем базовую тему с URL параметрами
+          // Combine theme options with URL parameters
           const finalTheme = {
-            ...(baseTheme || {}),
             ...configThemeOptions,
             ...urlThemeOptions
           };
 
           console.log('Final theme after applying URL parameters:', finalTheme);
           setThemeOptions(finalTheme);
-        } else {
-          // Иначе используем базовую тему с настройками из CloudFormation
-          const finalTheme = {
-            ...(baseTheme || {}),
-            ...configThemeOptions
-          };
 
-          console.log('Final theme with CloudFormation parameters:', finalTheme);
-          setThemeOptions(finalTheme);
+          // Update page title if headerText is provided in URL
+          if (urlThemeOptions.header_text) {
+            document.title = urlThemeOptions.header_text;
+          } else if (configThemeOptions.header_text) {
+            document.title = configThemeOptions.header_text;
+          }
+        } else {
+          // Otherwise just use environment settings
+          console.log('Final theme with environment variables:', configThemeOptions);
+          setThemeOptions(configThemeOptions);
+
+          // Update page title if headerText is provided in config
+          if (configThemeOptions.header_text) {
+            document.title = configThemeOptions.header_text;
+          }
         }
 
         if (id) {
@@ -243,213 +267,162 @@ function App() {
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! Status: ${response.status}`);
+        throw new Error(`API request failed with status: ${response.status}`);
       }
 
       const data = await response.json();
-      // Transform API response to the format expected by the component
-      const mediaDataFromApi: MediaData = {
-        mediaId: id,
-        url: data.download_url,
-        contentType: data.metadata.content_type,
-        filename: data.metadata.file_name,
-        createdAt: data.metadata.created_at
-      };
+      console.log('Media data received:', data);
+      setMediaData(data);
 
-      // Apply theme from API if available and not overridden by URL params
-      if (data.metadata.theme_options && Object.keys(themeOptions).length === 0) {
-        setThemeOptions(data.metadata.theme_options);
-        mediaDataFromApi.themeOptions = data.metadata.theme_options;
-      } else if (Object.keys(themeOptions).length > 0) {
-        // Keep URL params if they exist
-        mediaDataFromApi.themeOptions = themeOptions;
+      // Update page title from media data if available
+      if (data.themeOptions?.header_text) {
+        document.title = data.themeOptions.header_text;
       }
 
-      setMediaData(mediaDataFromApi);
-    } catch (err) {
-      console.error('Error fetching media data:', err);
-      setError('Failed to fetch');
-    } finally {
       setLoading(false);
+    } catch (err) {
+      console.error('Error fetching media:', err);
+      setLoading(false);
+      setError('Failed to load media. The link may be expired or invalid.');
     }
   };
 
-  // Apply theme styles to the page
-  const getThemeStyles = (): React.CSSProperties => {
-    const styles: React.CSSProperties = {
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      minHeight: '100vh',
-      padding: '20px',
-      textAlign: 'center'
-    };
-
-    if (themeOptions.background_color) {
-      styles.backgroundColor = themeOptions.background_color;
-    }
-
-    if (themeOptions.text_color) {
-      styles.color = themeOptions.text_color;
-    }
-
-    return styles;
-  };
-
-  // Get styles for buttons based on theme accent color
-  const getButtonStyles = (): React.CSSProperties => {
-    const styles: React.CSSProperties = {
-      backgroundColor: themeOptions.accent_color || '#4CAF50',
-      color: 'white',
-      padding: '10px 20px',
-      textDecoration: 'none',
-      borderRadius: '4px',
-      fontSize: '16px',
-      display: 'inline-block'
-    };
-
-    return styles;
-  };
-
-  // Получение URL логотипа с проверкой валидности
   const getLogoUrl = (): string | null => {
-    console.log('getLogoUrl called, themeOptions:', themeOptions);
-    console.log('Fallback logo URL from config:', fallbackLogoUrl);
+    // If media data includes a logo_url, use that
+    if (mediaData?.themeOptions?.logo_url) {
+      return mediaData.themeOptions.logo_url;
+    }
 
-    // Проверяем URL логотипа из темы (высший приоритет)
+    // Otherwise use theme options from URL/env
     if (themeOptions.logo_url) {
-      console.log('Found logo_url in theme options:', themeOptions.logo_url);
-      try {
-        // Проверяем валидность URL
-        new URL(themeOptions.logo_url);
-        console.log('Valid URL, returning theme logo URL');
-        return themeOptions.logo_url;
-      } catch (e) {
-        console.warn('Invalid logo URL in theme options:', themeOptions.logo_url);
-        // Если URL невалидный и начинается с /, считаем его относительным
-        if (themeOptions.logo_url.startsWith('/')) {
-          const fullUrl = `${window.location.origin}${themeOptions.logo_url}`;
-          console.log('Converting relative URL to absolute:', fullUrl);
-          return fullUrl;
-        }
-      }
+      return themeOptions.logo_url;
     }
 
-    // Возвращаем fallback URL или null, если он пустой
-    if (fallbackLogoUrl && fallbackLogoUrl !== "") {
-      console.log('Using fallback logo URL:', fallbackLogoUrl);
-      return fallbackLogoUrl;
-    }
-
-    console.log('No logo URL found, returning null');
-    return null;
+    // Fallback to default logo if configured
+    return fallbackLogoUrl;
   };
 
-  // Получить текст заголовка
   const getHeaderText = (): string => {
-    console.log('getHeaderText called, themeOptions:', themeOptions);
-    console.log('Config headerText:', config.headerText);
+    // If media data includes a header_text, use that
+    if (mediaData?.themeOptions?.header_text) {
+      return mediaData.themeOptions.header_text;
+    }
 
-    // Приоритет: из themeOptions, затем из конфига, потом дефолт
+    // Otherwise use theme options from URL/env
     if (themeOptions.header_text) {
-      console.log('Using header text from theme options:', themeOptions.header_text);
       return themeOptions.header_text;
     }
 
-    if (config.headerText && config.headerText !== "") {
-      console.log('Using header text from config:', config.headerText);
-      return config.headerText;
-    }
+    // Default
+    return "Media Sharing";
+  };
 
-    console.log('Using default header text');
-    return 'Media Sharing App';
+  const formatDate = (dateString: string): string => {
+    try {
+      const date = new Date(dateString);
+      return new Intl.DateTimeFormat('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      }).format(date);
+    } catch (e) {
+      return dateString;
+    }
   };
 
   const renderMedia = () => {
     if (!mediaData) return null;
 
-    const { url, contentType, filename } = mediaData;
+    const { contentType, url, filename } = mediaData;
 
-    // Check if it's an image type
-    const isImage = contentType.startsWith('image/');
+    if (contentType.startsWith('image/')) {
+      return <img id="media-image" src={url} alt={filename} />;
+    } else if (contentType.startsWith('video/')) {
+      return (
+        <video id="media-video" controls>
+          <source src={url} type={contentType} />
+          Your browser does not support the video tag.
+        </video>
+      );
+    } else if (contentType.startsWith('audio/')) {
+      return (
+        <audio id="media-audio" controls>
+          <source src={url} type={contentType} />
+          Your browser does not support the audio tag.
+        </audio>
+      );
+    } else {
+      // For other files (documents, etc.) show a download link
+      return (
+        <div id="generic-file-container">
+          <p id="generic-file-message">This file type can't be previewed directly.</p>
+          <p id="generic-file-name">{filename}</p>
+        </div>
+      );
+    }
+  };
 
+  if (loading) {
     return (
-      <div style={{ marginTop: '20px', width: '100%', maxWidth: '800px' }}>
-        <h2>{filename}</h2>
-
-        {isImage && (
-          <div style={{ margin: '20px 0' }}>
-            <img
-              src={url}
-              alt={filename}
-              style={{ maxWidth: '100%', maxHeight: '500px' }}
-            />
-          </div>
-        )}
-
-        <div style={{ marginTop: '20px' }}>
-          <a
-            href={url}
-            download={filename}
-            style={getButtonStyles()}
-          >
-            Download {filename}
-          </a>
+      <div id="app-container">
+        <div id="loading-container">
+          <div id="loading-indicator"></div>
+          <p id="loading-text">Loading...</p>
         </div>
       </div>
     );
-  };
+  }
 
-  // Monitor themeOptions changes
-  useEffect(() => {
-    console.log('themeOptions changed:', themeOptions);
+  if (error) {
+    return (
+      <div id="app-container">
+        <div id="error-container">
+          <h2 id="error-title">Error</h2>
+          <p id="error-message">{error}</p>
+        </div>
+      </div>
+    );
+  }
 
-    // Recompute important values when theme changes
-    if (Object.keys(themeOptions).length > 0) {
-      const logo = getLogoUrl();
-      const header = getHeaderText();
-      console.log(`With current theme options, logo: ${logo}, header: ${header}`);
-    }
-  }, [themeOptions]);
-
-  // Apply custom CSS if provided
-  useEffect(() => {
-    if (themeOptions.custom_css) {
-      console.log('Applying custom CSS from theme');
-      const styleElement = document.createElement('style');
-      styleElement.textContent = themeOptions.custom_css;
-      document.head.appendChild(styleElement);
-
-      return () => {
-        document.head.removeChild(styleElement);
-      };
-    }
-  }, [themeOptions.custom_css]);
+  const logoUrl = getLogoUrl();
+  const headerText = getHeaderText();
 
   return (
-    <div style={getThemeStyles()}>
-      {getLogoUrl() && (
-        <div style={{ marginBottom: '20px' }}>
-          <img src={getLogoUrl() || ''} alt="Logo" style={{ maxHeight: '100px' }} />
+    <div id="app-container">
+      <header id="header">
+        {logoUrl && (
+          <img id="logo" src={logoUrl} alt="Logo" />
+        )}
+        <h1 id="header-text">{headerText}</h1>
+      </header>
+
+      {mediaData && (
+        <div id="media-container">
+          <div id="media-content">
+            {renderMedia()}
+          </div>
+
+          <div id="file-info">
+            <div id="file-name">{mediaData.filename}</div>
+            <div id="file-type">{mediaData.contentType}</div>
+            <div id="created-date">
+              Created: {formatDate(mediaData.createdAt)}
+            </div>
+          </div>
+
+          <a
+            id="download-button"
+            href={mediaData.url}
+            download={mediaData.filename}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Download
+          </a>
         </div>
       )}
-
-      <h1>{getHeaderText()}</h1>
-
-      {!mediaData && (
-        <p>No media ID provided. Please scan a QR code or use a direct link to access media.</p>
-      )}
-
-      {loading && <p>Loading media data...</p>}
-
-      {error && (
-        <div style={{ color: 'red', margin: '20px 0' }}>
-          <p>Error: {error}</p>
-        </div>
-      )}
-
-      {renderMedia()}
     </div>
   );
 }

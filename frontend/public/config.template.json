@@ -1,7 +1,7 @@
 {
   "apiBaseUrl": "/api/v1",
   "themesDirectory": "themes",
-  "defaultTheme": "${DefaultTheme}",
+  "customCSSURL": "${CustomCSSURL}",
   "defaultLogoUrl": "${DefaultLogoUrl}",
-  "headerText": "${HeaderText}"
+  "pageTitle": "${PageTitle}"
 }

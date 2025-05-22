@@ -1,7 +1,0 @@
-{
-  "background_color": "#ffffff",
-  "text_color": "#333333",
-  "accent_color": "#4CAF50",
-  "header_text": "Media Sharing App",
-  "custom_css": ".download-button { box-shadow: 0 2px 5px rgba(0,0,0,0.2); transition: all 0.3s; } .download-button:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.2); }"
-}
