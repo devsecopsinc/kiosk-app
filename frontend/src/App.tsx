@@ -336,8 +336,8 @@ function App() {
     }
 
     // Default
-    console.log('Using default header text: "Media Sharing"');
-    return "Media Sharing";
+    console.log('Using default header text: "Media Sharin App"');
+    return "Media Sharing App";
   };
 
   const formatDate = (dateString: string): string => {
