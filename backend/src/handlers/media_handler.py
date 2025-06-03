@@ -25,7 +25,6 @@ MEDIA_BUCKET = os.environ['MEDIA_BUCKET']
 MEDIA_TABLE = os.environ['MEDIA_TABLE']
 USER_TABLE = os.environ['USER_TABLE']
 QR_MAPPING_TABLE = os.environ['QR_MAPPING_TABLE']
-PRODUCT = os.environ.get('PRODUCT', 'Kiosk') # Get product name or use "Kiosk" by default
 
 # Initialize DynamoDB tables
 media_table = dynamodb.Table(MEDIA_TABLE)
@@ -505,7 +504,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                     'Access-Control-Allow-Origin': '*'
                 },
                 'body': json.dumps({
-                    'message': f'{PRODUCT} Media API',
+                    'message': 'Kiosk Media API',
                     'endpoints': {
                         'GET /media/{id}': 'Get media by ID',
                         'POST /media': 'Create new media upload URL',
