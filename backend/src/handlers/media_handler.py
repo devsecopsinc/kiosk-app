@@ -242,7 +242,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                     "description": "API for Kiosk Media Solution that provides QR code generation and media upload/download functionality",
                     "version": "1.0.0",
                     "contact": {
-                        "name": "DevSecOps Inc"
+                        "name": "DevSecOps, Inc."
                     }
                 },
                 "servers": [
