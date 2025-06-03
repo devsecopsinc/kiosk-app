@@ -239,11 +239,11 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             openapi_spec = {
                 "openapi": "3.0.0",
                 "info": {
-                    "title": f"{PRODUCT} Media API",
-                    "description": f"API for {PRODUCT} Media Solution that provides QR code generation and media upload/download functionality",
+                    "title": "Kiosk Media API",
+                    "description": "API for Kiosk Media Solution that provides QR code generation and media upload/download functionality",
                     "version": "1.0.0",
                     "contact": {
-                        "name": "DevSecOps Inc"
+                        "name": "DevSecOps, Inc."
                     }
                 },
                 "servers": [
