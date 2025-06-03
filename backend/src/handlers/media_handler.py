@@ -241,13 +241,230 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                     'Cache-Control': 'no-cache, no-store, must-revalidate'
                 },
                 'body': json.dumps({
-                    'message': 'Kiosk Media API v1',
-                    'endpoints': {
-                        'GET /api/v1/media/{id}': 'Get media information and download URL',
-                        'POST /api/v1/media': 'Generate upload URL for media',
-                        'POST /api/v1/qr': 'Generate QR code for media'
+                    "openapi": "3.0.0",
+                    "info": {
+                        "title": "${Product} Media API",
+                        "description": "API for Kiosk Media Solution that provides QR code generation and media upload/download functionality",
+                        "version": "1.0.0",
+                        "contact": {
+                            "name": "DevSecOps Inc"
+                        }
                     },
-                    'version': '1.0'
+                    "servers": [
+                        {
+                            "url": "/api/v1",
+                            "description": "API Gateway endpoint"
+                        }
+                    ],
+                    "paths": {
+                        "/media": {
+                            "post": {
+                                "summary": "Generate upload URL for media",
+                                "description": "Generate a presigned S3 URL for uploading media",
+                                "requestBody": {
+                                    "required": true,
+                                    "content": {
+                                        "application/json": {
+                                            "schema": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "file_name": {
+                                                        "type": "string",
+                                                        "description": "Name of the file to upload"
+                                                    },
+                                                    "content_type": {
+                                                        "type": "string",
+                                                        "description": "MIME type of the file"
+                                                    },
+                                                    "user_id": {
+                                                        "type": "string",
+                                                        "description": "User ID (defaults to anonymous)"
+                                                    },
+                                                    "theme_options": {
+                                                        "type": "object",
+                                                        "properties": {
+                                                            "background_color": {"type": "string"},
+                                                            "text_color": {"type": "string"},
+                                                            "accent_color": {"type": "string"},
+                                                            "header_text": {"type": "string"},
+                                                            "logo_url": {"type": "string"},
+                                                            "custom_css": {"type": "string"}
+                                                        }
+                                                    }
+                                                },
+                                                "required": ["file_name", "content_type"]
+                                            }
+                                        }
+                                    }
+                                },
+                                "responses": {
+                                    "200": {
+                                        "description": "Upload URL generated successfully",
+                                        "content": {
+                                            "application/json": {
+                                                "schema": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "upload_url": {"type": "string"},
+                                                        "media_id": {"type": "string"},
+                                                        "metadata": {"type": "object"}
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "/media/{id}": {
+                            "get": {
+                                "summary": "Get media information and download URL",
+                                "description": "Get information about media and a presigned URL for downloading",
+                                "parameters": [
+                                    {
+                                        "name": "id",
+                                        "in": "path",
+                                        "required": true,
+                                        "schema": {"type": "string"},
+                                        "description": "Media ID"
+                                    }
+                                ],
+                                "responses": {
+                                    "200": {
+                                        "description": "Media information retrieved successfully",
+                                        "content": {
+                                            "application/json": {
+                                                "schema": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "download_url": {"type": "string"},
+                                                        "metadata": {"type": "object"}
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    },
+                                    "404": {
+                                        "description": "Media not found"
+                                    }
+                                }
+                            }
+                        },
+                        "/qr": {
+                            "post": {
+                                "summary": "Generate QR code for media",
+                                "description": "Generate a QR code for media access",
+                                "requestBody": {
+                                    "required": true,
+                                    "content": {
+                                        "application/json": {
+                                            "schema": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "media_id": {
+                                                        "type": "string",
+                                                        "description": "Media ID"
+                                                    },
+                                                    "frontend_url": {
+                                                        "type": "string",
+                                                        "description": "Optional frontend URL to use for QR code"
+                                                    },
+                                                    "expires_at": {
+                                                        "type": "integer",
+                                                        "description": "Expiration timestamp (defaults to 7 days)"
+                                                    }
+                                                },
+                                                "required": ["media_id"]
+                                            }
+                                        }
+                                    }
+                                },
+                                "responses": {
+                                    "200": {
+                                        "description": "QR code generated successfully",
+                                        "content": {
+                                            "application/json": {
+                                                "schema": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "qr_code": {"type": "string"},
+                                                        "media_id": {"type": "string"},
+                                                        "mapping": {"type": "object"}
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    },
+                                    "404": {
+                                        "description": "Media not found"
+                                    }
+                                }
+                            }
+                        },
+                        "/qr/{id}": {
+                            "get": {
+                                "summary": "Get QR code mapping",
+                                "description": "Get information about a QR code mapping",
+                                "parameters": [
+                                    {
+                                        "name": "id",
+                                        "in": "path",
+                                        "required": true,
+                                        "schema": {"type": "string"},
+                                        "description": "QR code ID"
+                                    }
+                                ],
+                                "responses": {
+                                    "200": {
+                                        "description": "QR code mapping retrieved successfully",
+                                        "content": {
+                                            "application/json": {
+                                                "schema": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "url": {"type": "string"},
+                                                        "created_at": {"type": "string"},
+                                                        "expires_at": {"type": "integer"},
+                                                        "status": {"type": "string"}
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    },
+                                    "404": {
+                                        "description": "QR code not found"
+                                    },
+                                    "410": {
+                                        "description": "QR code has expired"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "components": {
+                        "schemas": {
+                            "MediaMetadata": {
+                                "type": "object",
+                                "properties": {
+                                    "file_name": {"type": "string"},
+                                    "content_type": {"type": "string"},
+                                    "user_id": {"type": "string"},
+                                    "expires_at": {"type": "integer"},
+                                    "theme_options": {
+                                        "type": "object",
+                                        "properties": {
+                                            "background_color": {"type": "string"},
+                                            "text_color": {"type": "string"},
+                                            "accent_color": {"type": "string"},
+                                            "header_text": {"type": "string"},
+                                            "logo_url": {"type": "string"},
+                                            "custom_css": {"type": "string"}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 })
             }
         
