@@ -16,6 +16,7 @@ interface MediaData {
   contentType: string;
   filename: string;
   createdAt: string;
+  expiresAt?: string | number;
   themeOptions?: ThemeOptions;
 }
 
@@ -282,6 +283,7 @@ function App() {
         contentType: data.contentType || data.metadata?.content_type || 'application/octet-stream',
         filename: data.filename || data.metadata?.file_name || 'download',
         createdAt: data.createdAt || data.metadata?.created_at || new Date().toISOString(),
+        expiresAt: data.expiresAt || data.metadata?.expires_at || undefined,
         themeOptions: data.themeOptions || {}
       };
 
@@ -336,13 +338,19 @@ function App() {
     }
 
     // Default
-    console.log('Using default header text: "Media Sharin App"');
-    return "Media Sharing App";
+    console.log('Using default header text: "Media Sharing"');
+    return "Media Sharing";
   };
 
-  const formatDate = (dateString: string): string => {
+  const formatDate = (dateString: string | number | undefined): string => {
+    if (!dateString) return 'N/A';
+
     try {
-      const date = new Date(dateString);
+      // If it's a number (Unix timestamp in seconds), convert to milliseconds
+      const date = typeof dateString === 'number'
+        ? new Date(dateString * 1000)
+        : new Date(dateString);
+
       return new Intl.DateTimeFormat('en-US', {
         year: 'numeric',
         month: 'long',
@@ -351,7 +359,7 @@ function App() {
         minute: '2-digit'
       }).format(date);
     } catch (e) {
-      return dateString;
+      return String(dateString);
     }
   };
 
@@ -436,6 +444,11 @@ function App() {
             <div id="created-date">
               Created: {formatDate(mediaData.createdAt)}
             </div>
+            {mediaData.expiresAt && (
+              <div id="expires-date">
+                Expires: {formatDate(mediaData.expiresAt)}
+              </div>
+            )}
           </div>
 
           <a
@@ -453,4 +466,4 @@ function App() {
   );
 }
 
-export default App;
+export default App; 
