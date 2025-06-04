@@ -441,11 +441,11 @@ function App() {
           <div id="file-info">
             <div id="file-name">{mediaData.filename}</div>
             <div id="file-type">{mediaData.contentType}</div>
-            <div id="created-date">
+            <div id="created-date" style={{ color: '#4CAF50' }}>
               Created: {formatDate(mediaData.createdAt)}
             </div>
             {mediaData.expiresAt && (
-              <div id="expires-date">
+              <div id="expires-date" style={{ color: '#F44336' }}>
                 Expires: {formatDate(mediaData.expiresAt)}
               </div>
             )}
