@@ -97,7 +97,13 @@ body {
 
 #created-date {
   font-size: 0.9rem;
-  color: #aaa;
+  color: #4CAF50;
+  margin-top: 5px;
+}
+
+#expires-date {
+  font-size: 0.9rem;
+  color: #F44336;
   margin-top: 5px;
 }
 
@@ -114,6 +120,9 @@ body {
   font-weight: bold;
   transition: all 0.3s;
   box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
+  text-decoration: none;
+  text-align: center;
+  display: block;
 }
 
 #download-button:hover {

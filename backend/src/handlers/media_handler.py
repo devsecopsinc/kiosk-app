@@ -25,6 +25,7 @@ MEDIA_BUCKET = os.environ['MEDIA_BUCKET']
 MEDIA_TABLE = os.environ['MEDIA_TABLE']
 USER_TABLE = os.environ['USER_TABLE']
 QR_MAPPING_TABLE = os.environ['QR_MAPPING_TABLE']
+MEDIA_EXPIRATION_DAYS = int(os.environ.get('MEDIA_EXPIRATION_DAYS', '30'))
 
 # Initialize DynamoDB tables
 media_table = dynamodb.Table(MEDIA_TABLE)
@@ -43,7 +44,7 @@ class MediaMetadata(BaseModel):
     file_name: str
     content_type: str
     user_id: str = Field(default="anonymous")
-    expires_at: int = Field(default_factory=lambda: int((datetime.now() + timedelta(days=30)).timestamp()))
+    expires_at: int = Field(default_factory=lambda: int((datetime.now() + timedelta(days=MEDIA_EXPIRATION_DAYS)).timestamp()))
     theme_options: Optional[ThemeOptions] = Field(default=None)
 
 def convert_dynamodb_item(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -242,7 +243,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                     "description": "API for Kiosk Media Solution that provides QR code generation and media upload/download functionality",
                     "version": "1.0.0",
                     "contact": {
-                        "name": "DevSecOps, Inc."
+                        "name": "DevSecOps, Inc"
                     }
                 },
                 "servers": [
