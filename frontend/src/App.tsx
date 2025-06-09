@@ -452,15 +452,15 @@ function App() {
           </div>
 
           <div id="download-container">
-            <a
-              id="download-button"
-              href={mediaData.url}
-              download={mediaData.filename}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Download
-            </a>
+          <a
+            id="download-button"
+            href={mediaData.url}
+            download={mediaData.filename}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Download
+          </a>
           </div>
         </div>
       )}
