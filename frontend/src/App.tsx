@@ -48,7 +48,7 @@ function App() {
     const defaultConfig: Config = {
       apiBaseUrl: '/api/v1',
       themesDirectory: 'themes',
-      customCSSURL: 'themes/dark.css', // Default to dark theme
+      customCSSURL: '/themes/dark.css', // Default to dark theme
       defaultLogoUrl: undefined,
       pageTitle: undefined
     };
@@ -174,7 +174,7 @@ function App() {
         console.log('Loading CSS based on configuration...');
 
         // Always load dark theme by default, unless customCSSURL is specified
-        const cssSource = appConfig.customCSSURL || 'themes/dark.css';
+        const cssSource = appConfig.customCSSURL || '/themes/dark.css';
         console.log('CSS source (from config or default):', cssSource);
         const cssLoaded = await loadCustomCSS(cssSource);
         setCustomCSSLoaded(cssLoaded);
