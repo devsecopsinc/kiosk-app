@@ -83,7 +83,7 @@ function App() {
     console.log('Loading custom CSS, source value:', cssURLValue);
 
     try {
-      let cssUrl = 'themes/dark.css'; // Default to dark theme
+      let cssUrl = '/themes/dark.css'; // Default to dark theme
 
       // Check if cssURLValue is a URL
       let isUrl = false;
@@ -96,7 +96,7 @@ function App() {
         }
       } catch (e) {
         // If it's not a URL but has a value different from default, use it as a relative path
-        if (cssURLValue && cssURLValue !== 'themes/dark.css') {
+        if (cssURLValue && cssURLValue !== '/themes/dark.css') {
           cssUrl = cssURLValue;
           console.log('CSS source is a custom relative path:', cssUrl);
         } else {
@@ -129,10 +129,10 @@ function App() {
         linkElement.onerror = () => {
           console.warn(`Failed to load CSS from ${cssUrl}, falling back to default dark theme`);
           // If custom CSS fails, fall back to the default dark theme
-          if (cssUrl !== 'themes/dark.css') {
+          if (cssUrl !== '/themes/dark.css') {
             const fallbackLink = document.createElement('link');
             fallbackLink.rel = 'stylesheet';
-            fallbackLink.href = 'themes/dark.css';
+            fallbackLink.href = '/themes/dark.css';
             fallbackLink.id = 'custom-theme-css';
             document.head.appendChild(fallbackLink);
           }
