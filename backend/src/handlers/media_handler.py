@@ -28,11 +28,15 @@ MEDIA_TABLE = os.environ['MEDIA_TABLE']
 USER_TABLE = os.environ['USER_TABLE']
 QR_MAPPING_TABLE = os.environ['QR_MAPPING_TABLE']
 MEDIA_EXPIRATION_DAYS = int(os.environ['MEDIA_EXPIRATION_DAYS'])
+MPS_REGISTRATION_TOKEN = os.environ.get('MPS_REGISTRATION_TOKEN', '')
 
 # Initialize DynamoDB tables
 media_table = dynamodb.Table(MEDIA_TABLE)
 user_table = dynamodb.Table(USER_TABLE)
 qr_mapping_table = dynamodb.Table(QR_MAPPING_TABLE)
+
+# Global flag to track if marketplace token has been processed
+_marketplace_token_processed = False
 
 class ThemeOptions(BaseModel):
     background_color: Optional[str] = Field(default=None)
@@ -317,13 +321,47 @@ def validate_marketplace_access(user_id: str = "anonymous") -> bool:
         logger.error(f"Error validating marketplace access: {str(e)}")
         return False
 
+def initialize_marketplace_token() -> None:
+    """Initialize marketplace token automatically on Lambda cold start."""
+    global _marketplace_token_processed
+    
+    if _marketplace_token_processed:
+        return
+    
+    if not MPS_REGISTRATION_TOKEN or MPS_REGISTRATION_TOKEN.strip() == '':
+        logger.info("No marketplace registration token provided - skipping marketplace initialization")
+        _marketplace_token_processed = True
+        return
+    
+    try:
+        logger.info("Initializing marketplace token from environment variable")
+        
+        # Resolve the customer using the token
+        customer_data = resolve_marketplace_customer(MPS_REGISTRATION_TOKEN)
+        
+        if customer_data:
+            # Store the customer data
+            if store_marketplace_customer(customer_data, "anonymous"):
+                logger.info(f"Successfully processed marketplace token for customer: {customer_data.get('CustomerIdentifier', 'unknown')}")
+            else:
+                logger.warning("Failed to store marketplace customer data")
+        else:
+            logger.warning("Failed to resolve marketplace customer from token")
+        
+        _marketplace_token_processed = True
+        
+    except Exception as e:
+        logger.error(f"Error processing marketplace token during initialization: {str(e)}")
+        # Set the flag to prevent retry on every request
+        _marketplace_token_processed = True
+
 def create_pause_mode_response(message: str = "Marketplace subscription required") -> Dict[str, Any]:
     """
     Create a standardized response for when marketplace subscription is required.
-
+    
     Args:
         message: Custom message to display
-
+        
     Returns:
         HTTP 403 response with marketplace registration information
     """
@@ -346,12 +384,15 @@ def create_pause_mode_response(message: str = "Marketplace subscription required
 def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """Main Lambda handler."""
     try:
+        # Initialize marketplace token if not already processed
+        initialize_marketplace_token()
+        
         logger.info(f"Received event: {json.dumps(event)}")
-
+        
         # Extract method and path from event
         method = event['httpMethod']
         path = event.get('path', '')
-
+        
         # Get the proxy parameter if it exists (for proxy integration)
         proxy_param = None
         if event.get('pathParameters') and 'proxy' in event['pathParameters']:
@@ -362,11 +403,11 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             if not path or path == '/api/v1':
                 path = f"/api/v1/{proxy_param}"
                 logger.info(f"Updated path using proxy parameter: {path}")
-
+        
         # For exact /api/v1 path or variations, process here before path transformations
         if method == 'GET' and (path == '/api/v1' or path == '/api/v1/' or path.rstrip('/') == '/api/v1'):
             logger.info(f"Exact /api/v1 path detected, avoiding path conversion: {path}")
-
+            
             # Create OpenAPI object using Python dictionaries and lists
             openapi_spec = {
                 "openapi": "3.0.0",
@@ -594,7 +635,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                     }
                 }
             }
-
+            
             # Convert dictionary to JSON and return response
             return {
                 'statusCode': 200,
@@ -605,7 +646,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 },
                 'body': json.dumps(openapi_spec)
             }
-
+        
         # Check and detect duplication of /api/v1 path
         if path.endswith('/api/v1/v1'):
             logger.info(f"Detected path duplication: {path}, fixing")
@@ -616,18 +657,18 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         if path.startswith('/api/') and not path.startswith('/api/v1/'):
             logger.info(f"Converting API path: {path} to include v1")
             path = path.replace('/api/', '/api/v1/')
-
+        
         # Normalize the path
         normalized_path = normalize_path(path)
         logger.info(f"Normalized path from {path} to {normalized_path}")
-
+        
         # Extract the base path and ID if present
         path_parts = normalized_path.strip('/').split('/')
         base_path = f"/{path_parts[0]}" if path_parts else "/"
         path_id = path_parts[1] if len(path_parts) > 1 else None
         
         logger.info(f"Base path: {base_path}, Path ID: {path_id}")
-
+        
         # API Root path handling - list available endpoints
         if (method == 'GET' and (normalized_path == '/' or normalized_path == '')):
             return {
@@ -646,19 +687,19 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                     'version': '1.0'
                 })
             }
-
+        
         # Handle media upload request
         if method == 'POST' and base_path == '/media':
             body = json.loads(event['body']) if event.get('body') else {}
-
+            
             # Extract user_id for marketplace validation
             user_id = body.get('user_id', 'anonymous')
-
+            
             # Validate marketplace subscription for protected endpoints
             if not validate_marketplace_access(user_id):
                 logger.warning(f"Marketplace access denied for user: {user_id}")
                 return create_pause_mode_response("AWS Marketplace subscription required for media upload")
-
+            
             # Extract theme options if provided
             theme_options = None
             if 'theme_options' in body:
@@ -773,12 +814,12 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             body = json.loads(event['body']) if event.get('body') else {}
             media_id = body.get('media_id')
             user_id = body.get('user_id', 'anonymous')
-
+            
             # Validate marketplace subscription for QR generation
             if not validate_marketplace_access(user_id):
                 logger.warning(f"Marketplace access denied for QR generation for user: {user_id}")
                 return create_pause_mode_response("AWS Marketplace subscription required for QR code generation")
-
+            
             if not media_id:
                 return {
                     'statusCode': 400,
@@ -908,13 +949,13 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 },
                 'body': json.dumps(convert_dynamodb_item(item))
             }
-
+            
         # Handle marketplace customer registration
         elif method == 'POST' and base_path == '/marketplace' and path_id == 'register':
             body = json.loads(event['body']) if event.get('body') else {}
             registration_token = body.get('registration_token')
             user_id = body.get('user_id', 'anonymous')
-
+            
             if not registration_token:
                 return {
                     'statusCode': 400,
@@ -927,10 +968,10 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                         'message': 'Please provide the registration token from AWS Marketplace fulfillment URL'
                     })
                 }
-
+            
             # Resolve customer using AWS Marketplace API
             customer_data = resolve_marketplace_customer(registration_token)
-
+            
             if not customer_data:
                 return {
                     'statusCode': 400,
@@ -943,10 +984,10 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                         'message': 'Failed to resolve customer information from AWS Marketplace'
                     })
                 }
-
+            
             # Store marketplace customer mapping
             success = store_marketplace_customer(customer_data, user_id)
-
+            
             if not success:
                 return {
                     'statusCode': 500,
@@ -959,7 +1000,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                         'message': 'Failed to store marketplace customer information'
                     })
                 }
-
+            
             return {
                 'statusCode': 200,
                 'headers': {
@@ -973,14 +1014,14 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                     'user_id': user_id
                 })
             }
-
+            
         # Handle marketplace subscription validation
         elif method == 'GET' and base_path == '/marketplace' and path_id == 'validate':
             query_params = event.get('queryStringParameters') or {}
             user_id = query_params.get('user_id', 'anonymous')
-
+            
             is_valid = validate_marketplace_access(user_id)
-
+            
             return {
                 'statusCode': 200,
                 'headers': {
@@ -993,7 +1034,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                     'message': 'Subscription is active' if is_valid else 'No active marketplace subscription found'
                 })
             }
-
+        
         else:
             logger.warning(f"Path not found: {path} (normalized: {normalized_path})")
             return {
@@ -1009,7 +1050,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                     'method': method
                 })
             }
-
+            
     except Exception as e:
         logger.error(f"Error processing request: {str(e)}", exc_info=True)
         return {
@@ -1019,4 +1060,4 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 'Access-Control-Allow-Origin': '*'
             },
             'body': json.dumps({'error': f'Internal server error: {str(e)}'})
-        }
+        } 
