@@ -27,6 +27,7 @@ MEDIA_BUCKET = os.environ['MEDIA_BUCKET']
 MEDIA_TABLE = os.environ['MEDIA_TABLE']
 USER_TABLE = os.environ['USER_TABLE']
 QR_MAPPING_TABLE = os.environ['QR_MAPPING_TABLE']
+MARKETPLACE_CUSTOMERS_TABLE = os.environ['MARKETPLACE_CUSTOMERS_TABLE']
 MEDIA_EXPIRATION_DAYS = int(os.environ['MEDIA_EXPIRATION_DAYS'])
 MPS_REGISTRATION_TOKEN = os.environ.get('MPS_REGISTRATION_TOKEN', '')
 
@@ -34,6 +35,7 @@ MPS_REGISTRATION_TOKEN = os.environ.get('MPS_REGISTRATION_TOKEN', '')
 media_table = dynamodb.Table(MEDIA_TABLE)
 user_table = dynamodb.Table(USER_TABLE)
 qr_mapping_table = dynamodb.Table(QR_MAPPING_TABLE)
+marketplace_customers_table = dynamodb.Table(MARKETPLACE_CUSTOMERS_TABLE)
 
 # Global flag to track if marketplace token has been processed
 _marketplace_token_processed = False
@@ -228,11 +230,18 @@ def resolve_marketplace_customer(registration_token: str) -> Optional[Dict[str, 
         Dictionary with customer information or None if failed
     """
     try:
-        logger.info(f"Resolving marketplace customer with token: {registration_token[:20]}...")
+        # Check if token is URL-encoded and decode if needed
+        if '%' in registration_token:
+            logger.info("Token appears to be URL-encoded, decoding it")
+            registration_token = urllib.parse.unquote(registration_token)
+        
+        logger.info(f"Resolving marketplace customer with token: {registration_token[:10]}...")
         
         response = marketplace_metering.resolve_customer(
             RegistrationToken=registration_token
         )
+        
+        logger.info(f"Raw marketplace response: {json.dumps(response)}")
         
         customer_data = {
             'customer_identifier': response['CustomerIdentifier'],
@@ -246,6 +255,7 @@ def resolve_marketplace_customer(registration_token: str) -> Optional[Dict[str, 
         
     except Exception as e:
         logger.error(f"Failed to resolve marketplace customer: {str(e)}")
+        logger.error(f"Token used (first 10 chars): {registration_token[:10] if registration_token else 'None'}")
         return None
 
 def store_marketplace_customer(customer_data: Dict[str, Any], user_id: str = "anonymous") -> bool:
@@ -273,7 +283,7 @@ def store_marketplace_customer(customer_data: Dict[str, Any], user_id: str = "an
             'status': 'active'
         }
         
-        user_table.put_item(Item=item)
+        marketplace_customers_table.put_item(Item=item)
         logger.info(f"Stored marketplace customer mapping: {customer_data['customer_identifier']} -> {user_id}")
         return True
         
@@ -295,7 +305,7 @@ def validate_marketplace_access(user_id: str = "anonymous") -> bool:
         from boto3.dynamodb.conditions import Key, Attr
         
         # Query for marketplace customer records for this user
-        response = user_table.query(
+        response = marketplace_customers_table.query(
             IndexName='GSI_TypeIndex',
             KeyConditionExpression=Key('type').eq('marketplace_customer'),
             FilterExpression=Attr('user_id').eq(user_id) & Attr('status').eq('active')
@@ -326,6 +336,7 @@ def initialize_marketplace_token() -> None:
     global _marketplace_token_processed
     
     if _marketplace_token_processed:
+        logger.info("Marketplace token already processed, skipping initialization")
         return
     
     if not MPS_REGISTRATION_TOKEN or MPS_REGISTRATION_TOKEN.strip() == '':
@@ -334,15 +345,17 @@ def initialize_marketplace_token() -> None:
         return
     
     try:
-        logger.info("Initializing marketplace token from environment variable")
+        logger.info(f"Initializing marketplace token from environment variable (token length: {len(MPS_REGISTRATION_TOKEN)})")
         
         # Resolve the customer using the token
+        logger.info("Calling resolve_marketplace_customer with token")
         customer_data = resolve_marketplace_customer(MPS_REGISTRATION_TOKEN)
         
         if customer_data:
+            logger.info(f"Successfully resolved customer data: {json.dumps(customer_data)}")
             # Store the customer data
             if store_marketplace_customer(customer_data, "anonymous"):
-                logger.info(f"Successfully processed marketplace token for customer: {customer_data.get('CustomerIdentifier', 'unknown')}")
+                logger.info(f"Successfully processed marketplace token for customer: {customer_data.get('customer_identifier', 'unknown')}")
             else:
                 logger.warning("Failed to store marketplace customer data")
         else:
