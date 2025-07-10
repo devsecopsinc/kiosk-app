@@ -1027,7 +1027,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                     'user_id': user_id
                 })
             }
-            
+
         # Handle marketplace subscription validation
         elif method == 'GET' and base_path == '/marketplace' and path_id == 'validate':
             query_params = event.get('queryStringParameters') or {}
@@ -1047,7 +1047,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                     'message': 'Subscription is active' if is_valid else 'No active marketplace subscription found'
                 })
             }
-        
+
         else:
             logger.warning(f"Path not found: {path} (normalized: {normalized_path})")
             return {
@@ -1063,7 +1063,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                     'method': method
                 })
             }
-            
+
     except Exception as e:
         logger.error(f"Error processing request: {str(e)}", exc_info=True)
         return {
@@ -1073,4 +1073,4 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 'Access-Control-Allow-Origin': '*'
             },
             'body': json.dumps({'error': f'Internal server error: {str(e)}'})
-        } 
+        }
