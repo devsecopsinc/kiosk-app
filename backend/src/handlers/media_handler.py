@@ -1,36 +1,40 @@
 """
-Kiosk Media Handler with proper OOP architecture.
+Photo Kiosk Backend Media Handler
 
-This module follows SOLID principles and Clean Architecture patterns:
-- Single Responsibility Principle
-- Dependency Injection
-- Repository Pattern
-- Service Layer Pattern
-- Strategy Pattern
+Handles media upload, download, and QR code generation for the Photo Kiosk system.
+Supports file operations via S3 with signed URLs and DynamoDB for metadata storage.
 """
 
 import json
-import os
 import logging
-from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, Protocol
+import os
+import uuid
 from datetime import datetime, timedelta
-from dataclasses import dataclass
-from enum import Enum
+from decimal import Decimal
+from typing import Any, Dict, List, Optional, Protocol
+from urllib.parse import urlparse
 
 import boto3
-import uuid
 import qrcode
-from io import BytesIO
-import base64
-from pydantic import BaseModel, Field
-from decimal import Decimal
+from botocore.exceptions import ClientError, BotoCoreError
+from pydantic import BaseModel, Field, ValidationError
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# =============================================================================
-# DOMAIN MODELS (Data Transfer Objects)
-# =============================================================================
+# Constants - match stable version environment variables
+MEDIA_BUCKET = os.environ.get('MEDIA_BUCKET', 'photo-kiosk-media')
+MEDIA_TABLE = os.environ.get('MEDIA_TABLE', 'photo-kiosk-media')
+USER_TABLE = os.environ.get('USER_TABLE', 'photo-kiosk-users')
+QR_MAPPING_TABLE = os.environ.get('QR_MAPPING_TABLE', 'photo-kiosk-qr')
+MEDIA_EXPIRATION_DAYS = int(os.environ.get('MEDIA_EXPIRATION_DAYS', '7'))
+ALLOWED_CONTENT_TYPES = [
+    'image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp',
+    'video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/webm'
+]
 
+# Domain Models
 class ThemeOptions(BaseModel):
     """Theme configuration for media display."""
     background_color: Optional[str] = Field(default=None)
@@ -40,247 +44,242 @@ class ThemeOptions(BaseModel):
     logo_url: Optional[str] = Field(default=None)
     custom_css: Optional[str] = Field(default=None)
 
-
 class MediaMetadata(BaseModel):
     """Media metadata model with validation."""
     file_name: str
     content_type: str
     user_id: str = Field(default="anonymous")
-    expires_at: Optional[int] = Field(default=None)
+    expires_at: int = Field(default_factory=lambda: int((datetime.now() + timedelta(days=MEDIA_EXPIRATION_DAYS)).timestamp()))
     theme_options: Optional[ThemeOptions] = Field(default=None)
 
-    def __init__(self, **data):
-        super().__init__(**data)
-        if self.expires_at is None:
-            expiration_days = int(os.environ.get('MEDIA_EXPIRATION_DAYS', '7'))
-            self.expires_at = int((datetime.now() + timedelta(days=expiration_days)).timestamp())
-
-
-@dataclass(frozen=True)
-class MediaItem:
-    """Immutable media item representation."""
+class MediaItem(BaseModel):
+    """Domain model for media items."""
     media_id: str
     file_name: str
     content_type: str
     user_id: str
     file_path: str
     created_at: datetime
-    expires_at: int
+    expires_at: int  # Unix timestamp
     status: str = "active"
     theme_options: Optional[Dict[str, Any]] = None
 
-
-@dataclass(frozen=True)
-class QRMapping:
-    """Immutable QR code mapping representation."""
+class QRMapping(BaseModel):
+    """Domain model for QR code mappings."""
     media_id: str
     url: str
     created_at: datetime
-    expires_at: int
+    expires_at: int  # Unix timestamp
     status: str = "active"
 
+# Utility Functions (match stable version)
+def convert_dynamodb_item(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert DynamoDB types to JSON serializable types."""
+    if isinstance(item, dict):
+        return {k: convert_dynamodb_item(v) for k, v in item.items()}
+    elif isinstance(item, list):
+        return [convert_dynamodb_item(i) for i in item]
+    elif isinstance(item, Decimal):
+        return float(item)
+    elif isinstance(item, datetime):
+        return item.isoformat()
+    else:
+        return item
 
-class UsageDimension(Enum):
-    """Marketplace usage dimensions."""
-    MEDIA_UPLOAD = "Media_Upload"
-    MEDIA_DOWNLOAD = "Media_Download"
-    QR_CODE_GENERATION = "QR_Code_Generation"
-    USAGE_HOURS = "Usage_Hours"
-
-
-# =============================================================================
-# INTERFACES / PROTOCOLS
-# =============================================================================
-
-class StorageRepository(Protocol):
-    """Protocol for storage operations."""
+def generate_media_path(media_id: str, file_name: str) -> str:
+    """Generate a path for media storage with date-based structure (match stable version)."""
+    now = datetime.now()
+    date_string = now.strftime("%Y-%m-%d")
     
-    def generate_upload_url(self, bucket: str, key: str, expires_in: int = 3600) -> str:
-        """Generate presigned upload URL."""
-        ...
+    # Extract just the filename without path if file_name includes path
+    base_file_name = os.path.basename(file_name)
     
-    def generate_download_url(self, bucket: str, key: str, content_type: str, expires_in: int = 3600) -> str:
-        """Generate presigned download URL."""
-        ...
+    # Create path: media/YYYY-MM-DD/media_id/file_name (match stable version)
+    return f"media/{date_string}/{media_id}/{base_file_name}"
 
+def normalize_path(path: str) -> str:
+    """Normalize API path to handle proxy integration properly (match stable version)."""
+    logger.info(f"Original path received: {path}")
+    
+    # For proxy integration with {proxy+}, we might receive paths like
+    # /api/v1/media or /media depending on configuration
+    if path.startswith('/api/v1/'):
+        # Path like /api/v1/media -> /media
+        normalized = '/' + path[8:]
+        logger.info(f"Path starts with /api/v1/ - normalized to: {normalized}")
+        return normalized
+    elif path == '/api/v1' or path == '/api/v1/':
+        # If it's just the API root without additional path, use root
+        logger.info(f"Path is API root - normalized to: /")
+        return '/'
+    elif path.startswith('/api/'):
+        # Handle /api/media pattern
+        normalized = '/' + path[5:]
+        logger.info(f"Path starts with /api/ - normalized to: {normalized}")
+        return normalized
+    
+    # Handle proxy path parameter if present
+    if path.startswith('/proxy/') or path.startswith('/proxy'):
+        normalized = '/' + path.replace('/proxy', '').strip('/')
+        logger.info(f"Path contains proxy prefix - normalized to: {normalized}")
+        return normalized
+    
+    # If the path is already clean (e.g., /media), return as is
+    logger.info(f"Path appears to be already normalized: {path}")
+    return path
 
+# Repository Protocols
 class MediaRepository(Protocol):
     """Protocol for media metadata operations."""
     
-    def save_media_metadata(self, media_item: MediaItem) -> Dict[str, Any]:
-        """Save media metadata."""
+    def store_media_metadata(self, metadata: MediaMetadata, media_id: str) -> Dict[str, Any]:
+        """Store media metadata."""
         ...
     
     def get_media_by_id(self, media_id: str) -> Optional[MediaItem]:
-        """Get media by ID."""
+        """Get media metadata by ID."""
         ...
     
     def update_file_path(self, media_id: str, file_name: str, file_path: str) -> None:
         """Update file path for media."""
         ...
 
-
 class QRRepository(Protocol):
     """Protocol for QR code operations."""
     
-    def save_qr_mapping(self, qr_mapping: QRMapping) -> Dict[str, Any]:
-        """Save QR code mapping."""
+    def store_qr_mapping(self, qr_mapping: QRMapping) -> Dict[str, Any]:
+        """Store QR code mapping."""
         ...
     
     def get_qr_mapping(self, code: str) -> Optional[QRMapping]:
         """Get QR mapping by code."""
         ...
 
-
-class MarketplaceService(Protocol):
-    """Protocol for marketplace operations."""
-    
-    def check_subscription(self) -> Dict[str, Any]:
-        """Check marketplace subscription status."""
-        ...
-    
-    def report_usage(self, dimension: UsageDimension, quantity: int = 1) -> bool:
-        """Report usage to marketplace."""
-        ...
-
-
-class QRCodeGenerator(Protocol):
-    """Protocol for QR code generation."""
-    
-    def generate(self, url: str) -> str:
-        """Generate QR code as base64 string."""
-        ...
-
-
-# =============================================================================
-# CONCRETE IMPLEMENTATIONS
-# =============================================================================
-
-class AWSStorageRepository:
-    """AWS S3 storage implementation."""
-    
-    def __init__(self, s3_client):
-        self._s3 = s3_client
-        self._logger = logging.getLogger(__name__)
+class StorageRepository(Protocol):
+    """Protocol for storage operations."""
     
     def generate_upload_url(self, bucket: str, key: str, expires_in: int = 3600) -> str:
-        """Generate presigned upload URL."""
-        try:
-            self._logger.info(f"Generating upload URL: bucket={bucket}, key={key}")
-            return self._s3.generate_presigned_url(
-                'put_object',
-                Params={'Bucket': bucket, 'Key': key},
-                ExpiresIn=expires_in
-            )
-        except Exception as e:
-            self._logger.error(f"Error generating upload URL: {str(e)}")
-            raise
+        """Generate signed upload URL."""
+        ...
     
     def generate_download_url(self, bucket: str, key: str, content_type: str, expires_in: int = 3600) -> str:
-        """Generate presigned download URL."""
-        try:
-            self._logger.info(f"Generating download URL: bucket={bucket}, key={key}")
-            return self._s3.generate_presigned_url(
-                'get_object',
-                Params={
-                    'Bucket': bucket, 
-                    'Key': key,
-                    'ResponseContentType': content_type
-                },
-                ExpiresIn=expires_in
-            )
-        except Exception as e:
-            self._logger.error(f"Error generating download URL: {str(e)}")
-            raise
+        """Generate signed download URL."""
+        ...
 
+class QRGenerator(Protocol):
+    """Protocol for QR code generation."""
+    
+    def generate_qr_code(self, data: str) -> str:
+        """Generate QR code and return base64 encoded image."""
+        ...
 
+# Repository Implementations
 class DynamoDBMediaRepository:
-    """DynamoDB media metadata implementation."""
+    """DynamoDB implementation of MediaRepository."""
     
-    def __init__(self, table):
-        self._table = table
+    def __init__(self, dynamodb_resource, table_name: str):
+        self._dynamodb = dynamodb_resource
+        self._table = dynamodb_resource.Table(table_name)
         self._logger = logging.getLogger(__name__)
-    
-    def save_media_metadata(self, media_item: MediaItem) -> Dict[str, Any]:
-        """Save media metadata to DynamoDB."""
+
+    def store_media_metadata(self, metadata: MediaMetadata, media_id: str) -> Dict[str, Any]:
+        """Store media metadata in DynamoDB (match stable version structure)."""
         try:
             item = {
-                'pk': f"MEDIA#{media_item.media_id}",
-                'sk': f"METADATA#{media_item.file_name}",
-                'user_id': media_item.user_id,
-                'file_name': media_item.file_name,
-                'content_type': media_item.content_type,
-                'created_at': media_item.created_at.isoformat(),
-                'expires_at': media_item.expires_at,
-                'status': media_item.status,
-                'file_path': media_item.file_path
+                'pk': f"MEDIA#{media_id}",
+                'sk': f"METADATA#{metadata.file_name}",  # Match stable version
+                'user_id': metadata.user_id,
+                'file_name': metadata.file_name,
+                'content_type': metadata.content_type,
+                'created_at': datetime.now().isoformat(),
+                'expires_at': metadata.expires_at,
+                'status': 'active'
             }
             
-            if media_item.theme_options:
-                item['theme_options'] = media_item.theme_options
+            # Add theme options if provided
+            if metadata.theme_options:
+                theme_dict = metadata.theme_options.dict(exclude_none=True)
+                if theme_dict:
+                    item['theme_options'] = theme_dict
             
             self._table.put_item(Item=item)
+            self._logger.info(f"✅ Stored media metadata: {media_id}")
             return item
+            
         except Exception as e:
-            self._logger.error(f"Error saving media metadata: {str(e)}")
+            self._logger.error(f"❌ Failed to store media metadata: {str(e)}")
             raise
-    
+
     def get_media_by_id(self, media_id: str) -> Optional[MediaItem]:
-        """Get media by ID from DynamoDB."""
+        """Get media metadata by ID from DynamoDB (match stable version query)."""
         try:
             response = self._table.query(
                 KeyConditionExpression='pk = :pk AND begins_with(sk, :sk)',
                 ExpressionAttributeValues={
                     ':pk': f"MEDIA#{media_id}",
-                    ':sk': 'METADATA#'
+                    ':sk': 'METADATA#'  # Match stable version
                 }
             )
             
             if not response.get('Items'):
+                self._logger.warning(f"Media not found: {media_id}")
                 return None
             
             item = response['Items'][0]
+            
+            # Use stored file_path if available, otherwise generate path
+            if 'file_path' in item:
+                file_path = item['file_path']
+            else:
+                # Generate file path using the media_id directly (now using UUID)
+                file_path = f"media/{media_id}/{item['file_name']}"
+                # For newer format with date-based paths
+                date_string = datetime.now().strftime("%Y-%m-%d")
+                file_path = f"media/{date_string}/{media_id}/{item['file_name']}"
+            
             return MediaItem(
                 media_id=media_id,
                 file_name=item['file_name'],
                 content_type=item['content_type'],
                 user_id=item['user_id'],
-                file_path=item.get('file_path', f"media/{media_id}/{item['file_name']}"),
+                file_path=file_path,
                 created_at=datetime.fromisoformat(item['created_at']),
                 expires_at=int(item['expires_at']),  # Convert Decimal to int
                 status=item.get('status', 'active'),
                 theme_options=item.get('theme_options')
             )
+            
         except Exception as e:
-            self._logger.error(f"Error getting media by ID: {str(e)}")
-            raise
+            self._logger.error(f"❌ Failed to get media by ID: {str(e)}")
+            return None
     
     def update_file_path(self, media_id: str, file_name: str, file_path: str) -> None:
-        """Update file path for media."""
+        """Update file path for media (match stable version)."""
         try:
             self._table.update_item(
                 Key={'pk': f"MEDIA#{media_id}", 'sk': f"METADATA#{file_name}"},
                 UpdateExpression="SET file_path = :file_path",
                 ExpressionAttributeValues={':file_path': file_path}
             )
+            self._logger.info(f"✅ Updated file path for media: {media_id}")
         except Exception as e:
-            self._logger.error(f"Error updating file path: {str(e)}")
+            self._logger.error(f"❌ Failed to update file path: {str(e)}")
             raise
 
-
 class DynamoDBQRRepository:
-    """DynamoDB QR mapping implementation."""
+    """DynamoDB implementation of QRRepository."""
     
-    def __init__(self, table):
-        self._table = table
+    def __init__(self, dynamodb_resource, table_name: str):
+        self._dynamodb = dynamodb_resource
+        self._table = dynamodb_resource.Table(table_name)
         self._logger = logging.getLogger(__name__)
-    
-    def save_qr_mapping(self, qr_mapping: QRMapping) -> Dict[str, Any]:
-        """Save QR mapping to DynamoDB."""
+
+    def store_qr_mapping(self, qr_mapping: QRMapping) -> Dict[str, Any]:
+        """Store QR mapping in DynamoDB (match stable version structure)."""
         try:
             item = {
                 'pk': f"QR#{qr_mapping.media_id}",
-                'sk': 'MAPPING',
+                'sk': 'MAPPING',  # Match stable version
                 'url': qr_mapping.url,
                 'created_at': qr_mapping.created_at.isoformat(),
                 'expires_at': qr_mapping.expires_at,
@@ -288,19 +287,25 @@ class DynamoDBQRRepository:
             }
             
             self._table.put_item(Item=item)
+            self._logger.info(f"✅ Stored QR mapping: {qr_mapping.media_id}")
             return item
+            
         except Exception as e:
-            self._logger.error(f"Error saving QR mapping: {str(e)}")
+            self._logger.error(f"❌ Failed to store QR mapping: {str(e)}")
             raise
-    
+
     def get_qr_mapping(self, code: str) -> Optional[QRMapping]:
-        """Get QR mapping by code."""
+        """Get QR mapping by code from DynamoDB (match stable version structure)."""
         try:
             response = self._table.get_item(
-                Key={'pk': f"QR#{code}", 'sk': 'MAPPING'}
+                Key={
+                    'pk': f"QR#{code}",
+                    'sk': 'MAPPING'  # Match stable version
+                }
             )
             
             if 'Item' not in response:
+                self._logger.warning(f"QR mapping not found: {code}")
                 return None
             
             item = response['Item']
@@ -311,566 +316,693 @@ class DynamoDBQRRepository:
                 expires_at=int(item['expires_at']),  # Convert Decimal to int
                 status=item.get('status', 'active')
             )
+            
         except Exception as e:
-            self._logger.error(f"Error getting QR mapping: {str(e)}")
+            self._logger.error(f"❌ Failed to get QR mapping: {str(e)}")
+            return None
+
+class S3StorageRepository:
+    """S3 implementation of StorageRepository."""
+    
+    def __init__(self, s3_client):
+        self._s3 = s3_client
+        self._logger = logging.getLogger(__name__)
+
+    def generate_upload_url(self, bucket: str, key: str, expires_in: int = 3600) -> str:
+        """Generate signed upload URL for S3 (match stable version)."""
+        try:
+            self._logger.info(f"Generating presigned URL: bucket={bucket}, key={key}, operation=put_object")
+            url = self._s3.generate_presigned_url(
+                'put_object',
+                Params={'Bucket': bucket, 'Key': key},
+                ExpiresIn=expires_in
+            )
+            
+            # Log the generated URL
+            safe_url = url[:50] + '...' if len(url) > 50 else url
+            self._logger.info(f"Generated presigned URL: {safe_url}")
+            
+            return url
+            
+        except Exception as e:
+            self._logger.error(f"❌ Failed to generate upload URL: {str(e)}")
             raise
 
-
-class AWSMarketplaceService:
-    """AWS Marketplace service implementation."""
-    
-    def __init__(self, marketplace_client):
-        self._marketplace = marketplace_client
-        self._logger = logging.getLogger(__name__)
-        self._cache = {'status': None, 'timestamp': 0}
-        self._cache_ttl = 3600  # 1 hour
-    
-    def check_subscription(self) -> Dict[str, Any]:
-        """Check marketplace subscription with caching."""
-        now = datetime.now().timestamp()
-        
-        if (self._cache['status'] and 
-            now - self._cache['timestamp'] < self._cache_ttl):
-            return self._cache['status']
-        
+    def generate_download_url(self, bucket: str, key: str, content_type: str, expires_in: int = 3600) -> str:
+        """Generate signed download URL for S3 (match stable version)."""
         try:
-            # Try to get marketplace registration token from environment
-            registration_token = os.environ.get('MARKETPLACE_REGISTRATION_TOKEN')
-            
-            if not registration_token:
-                # No token means not subscribed through marketplace
-                status = {
-                    'is_subscribed': False,
-                    'customer_id': "anonymous",
-                    'message': "No marketplace registration token found"
-                }
-                self._cache = {'status': status, 'timestamp': now}
-                return status
-            
-            # Resolve customer using registration token (proper AWS approach)
-            self._logger.info("Resolving marketplace customer with registration token")
-            response = self._marketplace.resolve_customer(
-                RegistrationToken=registration_token
-            )
-            
-            customer_identifier = response.get('CustomerIdentifier')
-            if customer_identifier:
-                status = {
-                    'is_subscribed': True,
-                    'customer_id': customer_identifier,
-                    'product_code': response.get('ProductCode'),
-                    'message': "Active marketplace subscription"
-                }
-                self._logger.info(f"✅ Marketplace subscription active: customer={customer_identifier}")
-            else:
-                status = {
-                    'is_subscribed': False,
-                    'customer_id': "anonymous",
-                    'message': "Invalid marketplace registration token"
-                }
-                self._logger.warning("❌ Marketplace registration token is invalid")
-            
-            self._cache = {'status': status, 'timestamp': now}
-            return status
-            
-        except Exception as e:
-            self._logger.warning(f"Failed to check marketplace subscription: {str(e)}")
-            status = {
-                'is_subscribed': False,
-                'customer_id': "anonymous",
-                'message': f"Subscription check failed: {str(e)}"
+            self._logger.info(f"Generating presigned URL: bucket={bucket}, key={key}, operation=get_object")
+            params = {
+                'Bucket': bucket, 
+                'Key': key,
+                'ResponseContentType': content_type
             }
-            self._cache = {'status': status, 'timestamp': now}
-            return status
-    
-    def report_usage(self, dimension: UsageDimension, quantity: int = 1) -> bool:
-        """Report usage to AWS Marketplace."""
-        try:
-            subscription = self.check_subscription()
             
-            if not subscription['is_subscribed']:
-                self._logger.info("Skipping marketplace usage reporting - no active subscription")
-                return False
-            
-            # Product code comes from ResolveCustomer response, not hardcoded
-            product_code = subscription.get('product_code')
-            if not product_code:
-                self._logger.warning("No product code available from marketplace subscription")
-                return False
-            
-            self._logger.info(f"Reporting marketplace usage: {dimension.value}, quantity={quantity}")
-            
-            response = self._marketplace.batch_meter_usage(
-                UsageRecords=[{
-                    'Timestamp': datetime.utcnow(),
-                    'CustomerIdentifier': subscription['customer_id'],
-                    'Dimension': dimension.value,
-                    'Quantity': quantity
-                }],
-                ProductCode=product_code
+            url = self._s3.generate_presigned_url(
+                'get_object',
+                Params=params,
+                ExpiresIn=expires_in
             )
             
-            self._logger.info(f"Usage reported successfully: {response}")
-            return True
+            # Log the generated URL
+            safe_url = url[:50] + '...' if len(url) > 50 else url
+            self._logger.info(f"Generated presigned URL: {safe_url}")
+            
+            return url
             
         except Exception as e:
-            self._logger.warning(f"Failed to report marketplace usage: {str(e)}")
-            return False
+            self._logger.error(f"❌ Failed to generate download URL: {str(e)}")
+            raise
 
-
-class DefaultQRCodeGenerator:
-    """Default QR code generator implementation."""
+class StandardQRGenerator:
+    """Standard QR code generator implementation."""
     
     def __init__(self):
         self._logger = logging.getLogger(__name__)
-    
-    def generate(self, url: str) -> str:
-        """Generate QR code as base64 string."""
+
+    def generate_qr_code(self, data: str) -> str:
+        """Generate QR code and return base64 encoded image (match stable version)."""
         try:
+            import base64
+            from io import BytesIO
+            
             qr = qrcode.QRCode(version=1, box_size=10, border=5)
-            qr.add_data(url)
+            qr.add_data(data)
             qr.make(fit=True)
             
             img = qr.make_image(fill_color="black", back_color="white")
             buffer = BytesIO()
-            img.save(buffer, format="PNG")
+            img.save(buffer, 'PNG')
             
-            return base64.b64encode(buffer.getvalue()).decode()
+            encoded_img = base64.b64encode(buffer.getvalue()).decode()
+            self._logger.info(f"✅ Generated QR code for data length: {len(data)}")
+            
+            return encoded_img
+            
         except Exception as e:
-            self._logger.error(f"Error generating QR code: {str(e)}")
+            self._logger.error(f"❌ Failed to generate QR code: {str(e)}")
             raise
 
-
-# =============================================================================
-# SERVICE LAYER (Business Logic)
-# =============================================================================
-
+# Service Layer
 class MediaService:
-    """Media management service."""
+    """Service for media operations."""
     
-    def __init__(
-        self,
-        storage_repo: StorageRepository,
-        media_repo: MediaRepository,
-        marketplace_service: MarketplaceService
-    ):
+    def __init__(self, storage_repo: StorageRepository, media_repo: MediaRepository):
         self._storage = storage_repo
-        self._media = media_repo
-        self._marketplace = marketplace_service
+        self._media_repo = media_repo
         self._logger = logging.getLogger(__name__)
-        self._bucket = os.environ['MEDIA_BUCKET']
-    
+
     def create_upload_url(self, metadata: MediaMetadata) -> Dict[str, Any]:
-        """Create upload URL for media."""
-        # Generate unique media ID
-        media_id = str(uuid.uuid4()).replace('-', '')
-        
-        # Generate file path
-        file_name = os.path.basename(metadata.file_name)
-        date_string = datetime.now().strftime("%Y-%m-%d")
-        file_path = f"media/{date_string}/{media_id}/{file_name}"
-        
-        # Create media item
-        media_item = MediaItem(
-            media_id=media_id,
-            file_name=file_name,
-            content_type=metadata.content_type,
-            user_id=metadata.user_id,
-            file_path=file_path,
-            created_at=datetime.now(),
-            expires_at=metadata.expires_at,
-            theme_options=metadata.theme_options.model_dump(exclude_none=True) if metadata.theme_options else None
-        )
-        
-        # Generate upload URL
-        upload_url = self._storage.generate_upload_url(self._bucket, file_path)
-        
-        # Save metadata
-        saved_item = self._media.save_media_metadata(media_item)
-        
-        # Report usage
-        self._marketplace.report_usage(UsageDimension.MEDIA_UPLOAD)
-        
-        return {
-            'upload_url': upload_url,
-            'media_id': media_id,
-            'metadata': self._convert_dynamodb_item(saved_item)
-        }
-    
+        """Create upload URL for media (match stable version logic)."""
+        try:
+            # Strip any path from the filename - only use basename
+            file_name = os.path.basename(metadata.file_name)
+            metadata.file_name = file_name
+            
+            # Generate media_id using UUID instead of base64 to avoid special characters
+            # This ensures we don't have any URL encoding issues with + / = characters
+            media_id = str(uuid.uuid4()).replace('-', '')
+            
+            # Log the generated ID
+            self._logger.info(f"Generated media_id: {media_id}")
+            
+            file_path = generate_media_path(media_id, file_name)
+            upload_url = self._storage.generate_upload_url(MEDIA_BUCKET, file_path)
+            
+            metadata_item = self._media_repo.store_media_metadata(metadata, media_id)
+            
+            # Store the file path in metadata for later retrieval (match stable version)
+            metadata_item['file_path'] = file_path
+            self._media_repo.update_file_path(media_id, file_name, file_path)
+            
+            self._logger.info(f"✅ Generated upload URL for media: {media_id}")
+            
+            return {
+                'upload_url': upload_url,
+                'media_id': media_id,
+                'metadata': convert_dynamodb_item(metadata_item)
+            }
+            
+        except Exception as e:
+            self._logger.error(f"❌ Failed to create upload URL: {str(e)}")
+            raise
+
     def get_media_download_url(self, media_id: str) -> Dict[str, Any]:
-        """Get download URL for media."""
-        media_item = self._media.get_media_by_id(media_id)
-        if not media_item:
-            raise ValueError("Media not found")
-        
-        download_url = self._storage.generate_download_url(
-            self._bucket,
-            media_item.file_path,
-            media_item.content_type
-        )
-        
-        # Report usage
-        self._marketplace.report_usage(UsageDimension.MEDIA_DOWNLOAD)
-        
-        return {
-            'download_url': download_url,
-            'metadata': self._media_item_to_dict(media_item)
-        }
-    
-    def _convert_dynamodb_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
-        """Convert DynamoDB types to JSON serializable types."""
-        if isinstance(item, dict):
-            return {k: self._convert_dynamodb_item(v) for k, v in item.items()}
-        elif isinstance(item, list):
-            return [self._convert_dynamodb_item(i) for i in item]
-        elif isinstance(item, Decimal):
-            return float(item)
-        elif isinstance(item, datetime):
-            return item.isoformat()
-        else:
-            return item
-    
+        """Get download URL for media file (match stable version logic)."""
+        try:
+            # Get media metadata
+            media_item = self._media_repo.get_media_by_id(media_id)
+            if not media_item:
+                raise ValueError("Media not found")
+            
+            # Add debug info for troubleshooting
+            self._logger.info(f"Media ID: {media_id}")
+            self._logger.info(f"File path: {media_item.file_path}")
+            
+            # Generate download URL
+            download_url = self._storage.generate_download_url(
+                MEDIA_BUCKET, 
+                media_item.file_path, 
+                media_item.content_type
+            )
+            
+            self._logger.info(f"✅ Generated download URL for media: {media_id}")
+            
+            return {
+                'download_url': download_url,
+                'metadata': self._media_item_to_dict(media_item)
+            }
+            
+        except Exception as e:
+            self._logger.error(f"❌ Failed to get media download URL: {str(e)}")
+            raise
+
     def _media_item_to_dict(self, media_item: MediaItem) -> Dict[str, Any]:
         """Convert MediaItem to dictionary."""
-        return {
+        return convert_dynamodb_item({
             'file_name': media_item.file_name,
             'content_type': media_item.content_type,
             'user_id': media_item.user_id,
             'created_at': media_item.created_at.isoformat(),
             'expires_at': media_item.expires_at,
             'status': media_item.status,
-            'theme_options': self._convert_dynamodb_item(media_item.theme_options) if media_item.theme_options else None
-        }
-
+            'theme_options': media_item.theme_options,
+            'file_path': media_item.file_path
+        })
 
 class QRService:
-    """QR code management service."""
+    """Service for QR code operations."""
     
-    def __init__(
-        self,
-        qr_repo: QRRepository,
-        media_repo: MediaRepository,
-        storage_repo: StorageRepository,
-        qr_generator: QRCodeGenerator,
-        marketplace_service: MarketplaceService
-    ):
+    def __init__(self, qr_repo: QRRepository, media_repo: MediaRepository, 
+                 storage_repo: StorageRepository, qr_generator: QRGenerator):
         self._qr_repo = qr_repo
         self._media_repo = media_repo
         self._storage = storage_repo
         self._qr_generator = qr_generator
-        self._marketplace = marketplace_service
         self._logger = logging.getLogger(__name__)
-        self._bucket = os.environ['MEDIA_BUCKET']
-    
+
     def generate_qr_code(self, media_id: str, frontend_url: Optional[str] = None, expires_at: Optional[int] = None) -> Dict[str, Any]:
-        """Generate QR code for media."""
-        # Get media info
-        media_item = self._media_repo.get_media_by_id(media_id)
-        if not media_item:
-            raise ValueError("Media not found")
-        
-        # Determine expiration - ensure we have a valid int
-        final_expires_at: int
-        if expires_at is None:
-            final_expires_at = int((datetime.now() + timedelta(days=7)).timestamp())
-        else:
-            final_expires_at = expires_at
-        
-        # Determine URL to use
-        if frontend_url:
-            url_to_use = self._normalize_frontend_url(frontend_url)
-        else:
-            url_to_use = self._storage.generate_download_url(
-                self._bucket,
-                media_item.file_path,
-                media_item.content_type,
-                expires_in=7*24*3600  # 7 days
-            )
-        
-        # Generate QR code
-        qr_code = self._qr_generator.generate(url_to_use)
-        
-        # Save mapping
-        qr_mapping = QRMapping(
-            media_id=media_id,
-            url=url_to_use,
-            created_at=datetime.now(),
-            expires_at=final_expires_at
-        )
-        
-        mapping_item = self._qr_repo.save_qr_mapping(qr_mapping)
-        
-        # Report usage
-        self._marketplace.report_usage(UsageDimension.QR_CODE_GENERATION)
-        
-        return {
-            'qr_code': qr_code,
-            'media_id': media_id,
-            'mapping': self._convert_dynamodb_item(mapping_item)
-        }
-    
-    def get_qr_mapping(self, code: str) -> Dict[str, Any]:
-        """Get QR mapping by code."""
-        mapping = self._qr_repo.get_qr_mapping(code)
-        if not mapping:
-            raise ValueError("QR code not found")
-        
-        # Check if expired
-        if mapping.expires_at < int(datetime.now().timestamp()):
-            raise ValueError("QR code has expired")
-        
-        return {
-            'url': mapping.url,
-            'created_at': mapping.created_at.isoformat(),
-            'expires_at': mapping.expires_at,
-            'status': mapping.status
-        }
-    
-    def _normalize_frontend_url(self, frontend_url: str) -> str:
-        """Normalize frontend URL."""
-        if '?' in frontend_url:
-            base_url, query_part = frontend_url.split('?', 1)
-            if not base_url.endswith('/'):
-                base_url = f"{base_url}/"
-            return f"{base_url}?{query_part}"
-        else:
-            if not frontend_url.endswith('/'):
-                return f"{frontend_url}/"
-            return frontend_url
-    
-    def _convert_dynamodb_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
-        """Convert DynamoDB types to JSON serializable types."""
-        if isinstance(item, dict):
-            return {k: self._convert_dynamodb_item(v) for k, v in item.items()}
-        elif isinstance(item, list):
-            return [self._convert_dynamodb_item(i) for i in item]
-        elif isinstance(item, Decimal):
-            return float(item)
-        elif isinstance(item, datetime):
-            return item.isoformat()
-        else:
-            return item
-
-
-# =============================================================================
-# API LAYER (Controllers)
-# =============================================================================
-
-class APIResponse:
-    """API response helper."""
-    
-    @staticmethod
-    def success(data: Any, status_code: int = 200) -> Dict[str, Any]:
-        """Create success response."""
-        return {
-            'statusCode': status_code,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*',
-                'Cache-Control': 'no-cache, no-store, must-revalidate'
-            },
-            'body': json.dumps(data)
-        }
-        
-    @staticmethod
-    def error(message: str, status_code: int = 400) -> Dict[str, Any]:
-        """Create error response."""
-        return APIResponse.success({'error': message}, status_code)
-
-
-class MediaController:
-    """Media API controller."""
-    
-    def __init__(self, media_service: MediaService):
-        self._media_service = media_service
-        self._logger = logging.getLogger(__name__)
-    
-    def create_upload_url(self, event: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle POST /media."""
+        """Generate QR code for media access (match stable version logic)."""
         try:
-            # Validate body
-            if not event.get('body'):
-                return APIResponse.error('Request body is required', 400)
+            # Default expiration if not provided
+            final_expires_at = expires_at if expires_at else int((datetime.now() + timedelta(days=7)).timestamp())
             
-            body = json.loads(event['body'])
+            # Get media info first
+            media_item = self._media_repo.get_media_by_id(media_id)
+            if not media_item:
+                raise ValueError("Media not found")
             
-            # Extract theme options
-            theme_options = None
-            if 'theme_options' in body:
-                theme_data = body.pop('theme_options', {})
-                theme_options = ThemeOptions(**theme_data)
-            
-            # Create metadata
-            metadata = MediaMetadata(**body)
-            if theme_options:
-                metadata.theme_options = theme_options
+            # Check if frontend URL is provided, otherwise use direct S3 link (match stable version)
+            if frontend_url:
+                # Ensure the URL has a trailing slash before query parameters
+                if '?' in frontend_url:
+                    base_url, query_part = frontend_url.split('?', 1)
+                    if not base_url.endswith('/'):
+                        base_url = f"{base_url}/"
+                    url_to_use = f"{base_url}?{query_part}"
+                else:
+                    if not frontend_url.endswith('/'):
+                        url_to_use = f"{frontend_url}/"
+                    else:
+                        url_to_use = frontend_url
                 
-            # Create upload URL
-            result = self._media_service.create_upload_url(metadata)
-            return APIResponse.success(result)
-            
-        except json.JSONDecodeError:
-            return APIResponse.error('Invalid JSON in request body', 400)
-        except Exception as e:
-            self._logger.error(f"Error creating upload URL: {str(e)}")
-            return APIResponse.error(f'Invalid metadata: {str(e)}', 400)
-    
-    def get_media(self, media_id: str) -> Dict[str, Any]:
-        """Handle GET /media/{id}."""
-        try:
-            result = self._media_service.get_media_download_url(media_id)
-            return APIResponse.success(result)
-        except ValueError as e:
-            return APIResponse.error(str(e), 404)
-        except Exception as e:
-            self._logger.error(f"Error getting media: {str(e)}")
-            return APIResponse.error('Internal server error', 500)
-
-
-class QRController:
-    """QR code API controller."""
-    
-    def __init__(self, qr_service: QRService):
-        self._qr_service = qr_service
-        self._logger = logging.getLogger(__name__)
-    
-    def generate_qr(self, event: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle POST /qr."""
-        try:
-            if not event.get('body'):
-                return APIResponse.error('Request body is required', 400)
-            
-            body = json.loads(event['body'])
-            media_id = body.get('media_id')
-            
-            if not media_id:
-                return APIResponse.error('media_id is required', 400)
-            
-            if not isinstance(media_id, str) or len(media_id) != 32:
-                return APIResponse.error('Invalid media_id format', 400)
-            
-            frontend_url = body.get('frontend_url')
-            expires_at = body.get('expires_at')
-            
-            result = self._qr_service.generate_qr_code(media_id, frontend_url, expires_at)
-            return APIResponse.success(result)
-            
-        except json.JSONDecodeError:
-            return APIResponse.error('Invalid JSON in request body', 400)
-        except ValueError as e:
-            return APIResponse.error(str(e), 404)
-        except Exception as e:
-            self._logger.error(f"Error generating QR: {str(e)}")
-            return APIResponse.error('Internal server error', 500)
-    
-    def get_qr_mapping(self, code: str) -> Dict[str, Any]:
-        """Handle GET /qr/{id}."""
-        try:
-            result = self._qr_service.get_qr_mapping(code)
-            return APIResponse.success(result)
-        except ValueError as e:
-            error_message = str(e)
-            if "expired" in error_message:
-                return APIResponse.error(error_message, 410)
+                self._logger.info(f"Using normalized frontend URL for QR code: {url_to_use}")
             else:
-                return APIResponse.error(error_message, 404)
+                # Use direct S3 download link
+                url_to_use = self._storage.generate_download_url(
+                    MEDIA_BUCKET,
+                    media_item.file_path,
+                    media_item.content_type,
+                    expires_in=7*24*3600  # 7 days
+                )
+                self._logger.info(f"Using direct S3 URL for QR code: {url_to_use}")
+            
+            # Generate QR code image
+            qr_code_image = self._qr_generator.generate_qr_code(url_to_use)
+            
+            # Create QR mapping
+            qr_mapping = QRMapping(
+                media_id=media_id,
+                url=url_to_use,
+                created_at=datetime.now(),
+                expires_at=final_expires_at
+            )
+            
+            # Store QR mapping
+            mapping_item = self._qr_repo.store_qr_mapping(qr_mapping)
+            
+            self._logger.info(f"✅ Generated QR code for media: {media_id}")
+            
+            return {
+                'qr_code': qr_code_image,
+                'media_id': media_id,
+                'mapping': convert_dynamodb_item(mapping_item)
+            }
+            
         except Exception as e:
-            self._logger.error(f"Error getting QR mapping: {str(e)}")
-            return APIResponse.error('Internal server error', 500)
+            self._logger.error(f"❌ Failed to generate QR code: {str(e)}")
+            raise
 
+    def get_qr_mapping(self, code: str) -> Dict[str, Any]:
+        """Get QR mapping by code (match stable version logic)."""
+        try:
+            mapping = self._qr_repo.get_qr_mapping(code)
+            if not mapping:
+                raise ValueError("QR code not found")
+            
+            # Check if expired
+            if mapping.expires_at < int(datetime.now().timestamp()):
+                raise ValueError("QR code has expired")
+            
+            return convert_dynamodb_item({
+                'url': mapping.url,
+                'created_at': mapping.created_at.isoformat(),
+                'expires_at': mapping.expires_at,
+                'status': mapping.status
+            })
+            
+        except Exception as e:
+            self._logger.error(f"❌ Failed to get QR mapping: {str(e)}")
+            raise
 
-# =============================================================================
-# APPLICATION FACTORY & DEPENDENCY INJECTION
-# =============================================================================
-
-class ApplicationFactory:
-    """Factory for creating application dependencies."""
-    
-    @staticmethod
-    def create_media_controller() -> MediaController:
-        """Create media controller with all dependencies."""
-        # AWS clients
-        s3_client = boto3.client('s3')
-        dynamodb = boto3.resource('dynamodb')
-        marketplace_client = boto3.client('meteringmarketplace')
-        
-        # Tables
-        media_table = dynamodb.Table(os.environ['MEDIA_TABLE'])
-        
-        # Repositories
-        storage_repo = AWSStorageRepository(s3_client)
-        media_repo = DynamoDBMediaRepository(media_table)
-        marketplace_service = AWSMarketplaceService(marketplace_client)
-        
-        # Services
-        media_service = MediaService(storage_repo, media_repo, marketplace_service)
-        
-        # Controller
-        return MediaController(media_service)
-    
-    @staticmethod
-    def create_qr_controller() -> QRController:
-        """Create QR controller with all dependencies."""
-        # AWS clients
-        s3_client = boto3.client('s3')
-        dynamodb = boto3.resource('dynamodb')
-        marketplace_client = boto3.client('meteringmarketplace')
-        
-        # Tables
-        media_table = dynamodb.Table(os.environ['MEDIA_TABLE'])
-        qr_table = dynamodb.Table(os.environ['QR_MAPPING_TABLE'])
-        
-        # Repositories
-        storage_repo = AWSStorageRepository(s3_client)
-        media_repo = DynamoDBMediaRepository(media_table)
-        qr_repo = DynamoDBQRRepository(qr_table)
-        marketplace_service = AWSMarketplaceService(marketplace_client)
-        qr_generator = DefaultQRCodeGenerator()
-        
-        # Services
-        qr_service = QRService(qr_repo, media_repo, storage_repo, qr_generator, marketplace_service)
-        
-        # Controller
-        return QRController(qr_service)
-
-
-# =============================================================================
-# MAIN HANDLER
-# =============================================================================
-
+# Lambda Handler
 def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
-    """Main Lambda handler with proper dependency injection."""
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-    
+    """Main Lambda handler with OOP architecture but matching stable version logic."""
     try:
         logger.info(f"Received event: {json.dumps(event)}")
         
+        # Extract method and path from event
         method = event['httpMethod']
         path = event.get('path', '')
         
-        # Simple routing (can be extracted to Router class)
-        if method == 'POST' and '/media' in path:
-            controller = ApplicationFactory.create_media_controller()
-            return controller.create_upload_url(event)
+        # Get the proxy parameter if it exists (for proxy integration)
+        proxy_param = None
+        if event.get('pathParameters') and 'proxy' in event['pathParameters']:
+            proxy_param = event['pathParameters']['proxy']
+            logger.info(f"Proxy parameter: {proxy_param}")
+            
+            # If path is empty but we have a proxy param, use it
+            if not path or path == '/api/v1':
+                path = f"/api/v1/{proxy_param}"
+                logger.info(f"Updated path using proxy parameter: {path}")
         
-        elif method == 'GET' and '/media/' in path:
-            media_id = path.split('/')[-1]
-            controller = ApplicationFactory.create_media_controller()
-            return controller.get_media(media_id)
+        # Initialize dependencies
+        s3_client = boto3.client('s3')
+        dynamodb_resource = boto3.resource('dynamodb')
         
-        elif method == 'POST' and '/qr' in path:
-            controller = ApplicationFactory.create_qr_controller()
-            return controller.generate_qr(event)
+        storage_repo = S3StorageRepository(s3_client)
+        media_repo = DynamoDBMediaRepository(dynamodb_resource, MEDIA_TABLE)
+        qr_repo = DynamoDBQRRepository(dynamodb_resource, QR_MAPPING_TABLE)
+        qr_generator = StandardQRGenerator()
         
-        elif method == 'GET' and '/qr/' in path:
-            code = path.split('/')[-1]
-            controller = ApplicationFactory.create_qr_controller()
-            return controller.get_qr_mapping(code)
+        media_service = MediaService(storage_repo, media_repo)
+        qr_service = QRService(qr_repo, media_repo, storage_repo, qr_generator)
+        
+        # Handle OpenAPI specification (match stable version)
+        if method == 'GET' and (path == '/api/v1' or path == '/api/v1/' or path.rstrip('/') == '/api/v1'):
+            logger.info(f"Exact /api/v1 path detected, returning OpenAPI spec: {path}")
+            
+            # Create OpenAPI object (match stable version structure)
+            openapi_spec = {
+                "openapi": "3.0.0",
+                "info": {
+                    "title": "Kiosk Media API",
+                    "description": "API for Kiosk Media Solution that provides QR code generation and media upload/download functionality",
+                    "version": "1.0.0",
+                    "contact": {
+                        "name": "DevSecOps, Inc"
+                    }
+                },
+                "servers": [
+                    {
+                        "url": "/api/v1",
+                        "description": "API Gateway endpoint"
+                    }
+                ],
+                "paths": {
+                    "/media": {
+                        "post": {
+                            "summary": "Generate upload URL for media",
+                            "description": "Generate a presigned S3 URL for uploading media",
+                            "requestBody": {
+                                "required": True,
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "file_name": {
+                                                    "type": "string",
+                                                    "description": "Name of the file to upload"
+                                                },
+                                                "content_type": {
+                                                    "type": "string",
+                                                    "description": "MIME type of the file"
+                                                },
+                                                "user_id": {
+                                                    "type": "string",
+                                                    "description": "User ID (defaults to anonymous)"
+                                                },
+                                                "theme_options": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "background_color": {"type": "string"},
+                                                        "text_color": {"type": "string"},
+                                                        "accent_color": {"type": "string"},
+                                                        "header_text": {"type": "string"},
+                                                        "logo_url": {"type": "string"},
+                                                        "custom_css": {"type": "string"}
+                                                    }
+                                                }
+                                            },
+                                            "required": ["file_name", "content_type"]
+                                        }
+                                    }
+                                }
+                            },
+                            "responses": {
+                                "200": {
+                                    "description": "Upload URL generated successfully",
+                                    "content": {
+                                        "application/json": {
+                                            "schema": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "upload_url": {"type": "string"},
+                                                    "media_id": {"type": "string"},
+                                                    "metadata": {"type": "object"}
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "/media/{id}": {
+                        "get": {
+                            "summary": "Get media information and download URL",
+                            "description": "Get information about media and a presigned URL for downloading",
+                            "parameters": [
+                                {
+                                    "name": "id",
+                                    "in": "path",
+                                    "required": True,
+                                    "schema": {"type": "string"},
+                                    "description": "Media ID"
+                                }
+                            ],
+                            "responses": {
+                                "200": {
+                                    "description": "Media information retrieved successfully"
+                                },
+                                "404": {
+                                    "description": "Media not found"
+                                }
+                            }
+                        }
+                    },
+                    "/qr": {
+                        "post": {
+                            "summary": "Generate QR code for media",
+                            "description": "Generate a QR code for media access",
+                            "requestBody": {
+                                "required": True,
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "media_id": {
+                                                    "type": "string",
+                                                    "description": "Media ID"
+                                                },
+                                                "frontend_url": {
+                                                    "type": "string",
+                                                    "description": "Optional frontend URL to use for QR code"
+                                                },
+                                                "expires_at": {
+                                                    "type": "integer",
+                                                    "description": "Expiration timestamp (defaults to 7 days)"
+                                                }
+                                            },
+                                            "required": ["media_id"]
+                                        }
+                                    }
+                                }
+                            },
+                            "responses": {
+                                "200": {
+                                    "description": "QR code generated successfully"
+                                },
+                                "404": {
+                                    "description": "Media not found"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            return {
+                'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*',
+                    'Cache-Control': 'no-cache, no-store, must-revalidate'
+                },
+                'body': json.dumps(openapi_spec)
+            }
+        
+        # Check and detect duplication of /api/v1 path (match stable version)
+        if path.endswith('/api/v1/v1'):
+            logger.info(f"Detected path duplication: {path}, fixing")
+            path = path.replace('/api/v1/v1', '/api/v1')
+            logger.info(f"Fixed path: {path}")
+            
+        # For CloudFront routing to API Gateway through /api/v1/* (match stable version)
+        if path.startswith('/api/') and not path.startswith('/api/v1/'):
+            logger.info(f"Converting API path: {path} to include v1")
+            path = path.replace('/api/', '/api/v1/')
+        
+        # Normalize the path (match stable version)
+        normalized_path = normalize_path(path)
+        logger.info(f"Normalized path from {path} to {normalized_path}")
+        
+        # Extract the base path and ID if present
+        path_parts = normalized_path.strip('/').split('/')
+        base_path = f"/{path_parts[0]}" if path_parts else "/"
+        path_id = path_parts[1] if len(path_parts) > 1 else None
+        
+        logger.info(f"Base path: {base_path}, Path ID: {path_id}")
+        
+        # API Root path handling - list available endpoints (match stable version)
+        if method == 'GET' and (normalized_path == '/' or normalized_path == ''):
+            return {
+                'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({
+                    'message': 'Kiosk Media API',
+                    'endpoints': {
+                        'GET /media/{id}': 'Get media by ID',
+                        'POST /media': 'Create new media upload URL',
+                        'POST /qr': 'Generate QR code for media'
+                    },
+                    'version': '1.0'
+                })
+            }
+        
+        # Handle media upload request
+        if method == 'POST' and base_path == '/media':
+            try:
+                body = json.loads(event['body']) if event.get('body') else {}
+                
+                # Extract theme options if provided
+                theme_options = None
+                if 'theme_options' in body:
+                    theme_data = body.pop('theme_options', {})
+                    theme_options = ThemeOptions(**theme_data)
+                
+                metadata = MediaMetadata(**body)
+                
+                # Apply theme options if provided
+                if theme_options:
+                    metadata.theme_options = theme_options
+                
+                result = media_service.create_upload_url(metadata)
+                
+                return {
+                    'statusCode': 200,
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
+                    'body': json.dumps(result)
+                }
+                
+            except Exception as e:
+                logger.error(f"Error creating upload URL: {str(e)}")
+                return {
+                    'statusCode': 400,
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
+                    'body': json.dumps({'error': f'Invalid metadata: {str(e)}'})
+                }
+            
+        # Handle media retrieval
+        elif method == 'GET' and base_path == '/media' and path_id:
+            try:
+                media_id = path_id  # No need to URL decode with new UUID format
+                result = media_service.get_media_download_url(media_id)
+                
+                return {
+                    'statusCode': 200,
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
+                    'body': json.dumps(result)
+                }
+                
+            except ValueError:
+                return {
+                    'statusCode': 404,
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
+                    'body': json.dumps({'error': 'Media not found'})
+                }
+            except Exception as e:
+                logger.error(f"Error getting media: {str(e)}")
+                return {
+                    'statusCode': 500,
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
+                    'body': json.dumps({'error': 'Internal server error'})
+                }
+            
+        # Handle QR code generation
+        elif method == 'POST' and base_path == '/qr':
+            try:
+                body = json.loads(event['body']) if event.get('body') else {}
+                media_id = body.get('media_id')
+                
+                if not media_id:
+                    return {
+                        'statusCode': 400,
+                        'headers': {
+                            'Content-Type': 'application/json',
+                            'Access-Control-Allow-Origin': '*'
+                        },
+                        'body': json.dumps({'error': 'media_id is required'})
+                    }
+                
+                frontend_url = body.get('frontend_url')
+                expires_at = body.get('expires_at')
+                
+                result = qr_service.generate_qr_code(media_id, frontend_url, expires_at)
+                
+                return {
+                    'statusCode': 200,
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
+                    'body': json.dumps(result)
+                }
+                
+            except ValueError as e:
+                return {
+                    'statusCode': 404,
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
+                    'body': json.dumps({'error': str(e)})
+                }
+            except Exception as e:
+                logger.error(f"Error generating QR: {str(e)}")
+                return {
+                    'statusCode': 500,
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
+                    'body': json.dumps({'error': 'Internal server error'})
+                }
+        
+        # Handle QR code lookup
+        elif method == 'GET' and base_path == '/qr' and path_id:
+            try:
+                code = path_id
+                result = qr_service.get_qr_mapping(code)
+                
+                return {
+                    'statusCode': 200,
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
+                    'body': json.dumps(result)
+                }
+                
+            except ValueError as e:
+                error_message = str(e)
+                if "expired" in error_message:
+                    status_code = 410
+                else:
+                    status_code = 404
+                    
+                return {
+                    'statusCode': status_code,
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
+                    'body': json.dumps({'error': error_message})
+                }
+            except Exception as e:
+                logger.error(f"Error getting QR mapping: {str(e)}")
+                return {
+                    'statusCode': 500,
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
+                    'body': json.dumps({'error': 'Internal server error'})
+                }
         
         else:
-            return APIResponse.error('Not found', 404)
+            logger.warning(f"Path not found: {path} (normalized: {normalized_path})")
+            return {
+                'statusCode': 404,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({
+                    'error': 'Not found',
+                    'path': path,
+                    'normalized_path': normalized_path,
+                    'method': method
+                })
+            }
             
     except Exception as e:
         logger.error(f"Error processing request: {str(e)}", exc_info=True)
-        return APIResponse.error('Internal server error', 500) 
+        return {
+            'statusCode': 500,
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            },
+            'body': json.dumps({'error': f'Internal server error: {str(e)}'})
+        } 
