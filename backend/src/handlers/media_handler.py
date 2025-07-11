@@ -247,7 +247,7 @@ class DynamoDBMediaRepository:
                 user_id=item['user_id'],
                 file_path=item.get('file_path', f"media/{media_id}/{item['file_name']}"),
                 created_at=datetime.fromisoformat(item['created_at']),
-                expires_at=item['expires_at'],
+                expires_at=int(item['expires_at']),  # Convert Decimal to int
                 status=item.get('status', 'active'),
                 theme_options=item.get('theme_options')
             )
@@ -308,7 +308,7 @@ class DynamoDBQRRepository:
                 media_id=code,
                 url=item['url'],
                 created_at=datetime.fromisoformat(item['created_at']),
-                expires_at=item['expires_at'],
+                expires_at=int(item['expires_at']),  # Convert Decimal to int
                 status=item.get('status', 'active')
             )
         except Exception as e:
@@ -539,7 +539,7 @@ class MediaService:
             'created_at': media_item.created_at.isoformat(),
             'expires_at': media_item.expires_at,
             'status': media_item.status,
-            'theme_options': media_item.theme_options
+            'theme_options': self._convert_dynamodb_item(media_item.theme_options) if media_item.theme_options else None
         }
 
 
@@ -671,7 +671,7 @@ class APIResponse:
             },
             'body': json.dumps(data)
         }
-    
+        
     @staticmethod
     def error(message: str, status_code: int = 400) -> Dict[str, Any]:
         """Create error response."""
@@ -704,7 +704,7 @@ class MediaController:
             metadata = MediaMetadata(**body)
             if theme_options:
                 metadata.theme_options = theme_options
-            
+                
             # Create upload URL
             result = self._media_service.create_upload_url(metadata)
             return APIResponse.success(result)
