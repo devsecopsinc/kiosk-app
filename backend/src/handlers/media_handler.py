@@ -243,8 +243,7 @@ def report_marketplace_usage(product_code: str = None, dimension: str = "Usage_H
                     'Timestamp': datetime.utcnow(),
                     'CustomerIdentifier': 'anonymous',  # Default for public usage
                     'Dimension': dimension,
-                    'Quantity': quantity,
-                    'UsageAllocations': []
+                    'Quantity': quantity
                 }
             ],
             ProductCode=product_code
