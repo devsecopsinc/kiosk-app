@@ -48,7 +48,7 @@ class MediaMetadata(BaseModel):
     user_id: str = Field(default="anonymous")
     expires_at: Optional[int] = Field(default=None)
     theme_options: Optional[ThemeOptions] = Field(default=None)
-    
+
     def __init__(self, **data):
         super().__init__(**data)
         if self.expires_at is None:
@@ -333,21 +333,70 @@ class AWSMarketplaceService:
             now - self._cache['timestamp'] < self._cache_ttl):
             return self._cache['status']
         
-        # Simulate subscription check
-        status = {
-            'is_subscribed': False,
-            'customer_id': "anonymous",
-            'message': "No active marketplace subscription detected"
-        }
-        
-        self._cache = {'status': status, 'timestamp': now}
-        return status
+        try:
+            # Try to get marketplace registration token from environment
+            registration_token = os.environ.get('MARKETPLACE_REGISTRATION_TOKEN')
+            
+            if not registration_token:
+                # No token means not subscribed through marketplace
+                status = {
+                    'is_subscribed': False,
+                    'customer_id': "anonymous",
+                    'message': "No marketplace registration token found"
+                }
+                self._cache = {'status': status, 'timestamp': now}
+                return status
+            
+            # Resolve customer using registration token (proper AWS approach)
+            self._logger.info("Resolving marketplace customer with registration token")
+            response = self._marketplace.resolve_customer(
+                RegistrationToken=registration_token
+            )
+            
+            customer_identifier = response.get('CustomerIdentifier')
+            if customer_identifier:
+                status = {
+                    'is_subscribed': True,
+                    'customer_id': customer_identifier,
+                    'product_code': response.get('ProductCode'),
+                    'message': "Active marketplace subscription"
+                }
+                self._logger.info(f"✅ Marketplace subscription active: customer={customer_identifier}")
+            else:
+                status = {
+                    'is_subscribed': False,
+                    'customer_id': "anonymous",
+                    'message': "Invalid marketplace registration token"
+                }
+                self._logger.warning("❌ Marketplace registration token is invalid")
+            
+            self._cache = {'status': status, 'timestamp': now}
+            return status
+            
+        except Exception as e:
+            self._logger.warning(f"Failed to check marketplace subscription: {str(e)}")
+            status = {
+                'is_subscribed': False,
+                'customer_id': "anonymous",
+                'message': f"Subscription check failed: {str(e)}"
+            }
+            self._cache = {'status': status, 'timestamp': now}
+            return status
     
     def report_usage(self, dimension: UsageDimension, quantity: int = 1) -> bool:
         """Report usage to AWS Marketplace."""
         try:
             subscription = self.check_subscription()
-            product_code = os.environ.get('MARKETPLACE_PRODUCT_CODE', '70sy5qxc3m8bn5irlhf2w840x')
+            
+            if not subscription['is_subscribed']:
+                self._logger.info("Skipping marketplace usage reporting - no active subscription")
+                return False
+            
+            # Product code comes from ResolveCustomer response, not hardcoded
+            product_code = subscription.get('product_code')
+            if not product_code:
+                self._logger.warning("No product code available from marketplace subscription")
+                return False
             
             self._logger.info(f"Reporting marketplace usage: {dimension.value}, quantity={quantity}")
             
@@ -821,7 +870,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         
         else:
             return APIResponse.error('Not found', 404)
-    
+            
     except Exception as e:
         logger.error(f"Error processing request: {str(e)}", exc_info=True)
         return APIResponse.error('Internal server error', 500) 
