@@ -226,13 +226,17 @@ def report_marketplace_usage(product_code: str = None, dimension: str = "Usage_H
         True if usage reported successfully, False otherwise
     """
     try:
+        # Use environment variable for product code, fallback to parameter
+        if not product_code:
+            product_code = os.environ.get('MARKETPLACE_PRODUCT_CODE', '')
+            
+        # If no product code available, skip reporting (not a marketplace deployment)
+        if not product_code or product_code.strip() == '':
+            logger.info(f"No marketplace product code configured, skipping usage reporting for {dimension}")
+            return True
+            
         # Generate a unique usage record ID 
         usage_record_id = str(uuid.uuid4())
-        
-        # Use default product code if not provided
-        # In real marketplace setup, this would come from environment or resolved customer
-        if not product_code:
-            product_code = "photo-kiosk-backend"  # Default placeholder
             
         logger.info(f"Reporting marketplace usage: product_code={product_code}, dimension={dimension}, quantity={quantity}")
         
