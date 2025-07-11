@@ -1,7 +1,38 @@
-boto3==1.34.69
-pydantic==2.6.4
-qrcode==7.4.2
-pillow==10.2.0
-python-jose==3.3.0
-python-multipart==0.0.9
-typing-extensions==4.10.0
+# AWS SDK for Python
+boto3>=1.34.0
+
+# Data validation and settings management using Python type annotations
+pydantic>=2.0.0
+
+# QR Code generation
+qrcode>=7.4.0
+
+# Image processing for QR codes
+Pillow>=10.0.0
+
+# JSON handling (built-in, but specified for clarity)
+# json - built-in module
+
+# Logging (built-in)
+# logging - built-in module
+
+# UUID generation (built-in)
+# uuid - built-in module
+
+# Date and time handling (built-in)
+# datetime - built-in module
+
+# Type hints (built-in in Python 3.10+)
+# typing - built-in module
+
+# Base64 encoding (built-in)
+# base64 - built-in module
+
+# Decimal arithmetic (built-in)
+# decimal - built-in module
+
+# OS interface (built-in)
+# os - built-in module
+
+# BytesIO for in-memory binary streams (built-in)
+# io - built-in module
