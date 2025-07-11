@@ -19,6 +19,8 @@ logger.setLevel(logging.INFO)
 # Initialize AWS clients
 s3 = boto3.client('s3')
 dynamodb = boto3.resource('dynamodb')
+# Add marketplace metering client for usage reporting
+marketplace_metering = boto3.client('meteringmarketplace')
 
 # Get environment variables
 MEDIA_BUCKET = os.environ['MEDIA_BUCKET']
@@ -200,16 +202,62 @@ def extract_path_param(path: str, resource: str) -> str:
     return None
 
 def generate_media_path(media_id: str, file_name: str) -> str:
-    """Generate a path for media storage with simplified date-based structure."""
+    """Generate media path based on media_id and file_name."""
+    # Generate path using today's date for organization
     now = datetime.now()
     date_string = now.strftime("%Y-%m-%d")
     
-    # Extract just the filename without path if file_name includes path
+    # Get the base filename without extension and path
     base_file_name = os.path.basename(file_name)
     
     # Create simplified path: media/YYYY-MM-DD/media_id/file_name
     # Keep the "media/" prefix for compatibility
     return f"media/{date_string}/{media_id}/{base_file_name}"
+
+def report_marketplace_usage(product_code: str = None, dimension: str = "Usage_Hours", quantity: int = 1) -> bool:
+    """
+    Report usage to AWS Marketplace for billing purposes.
+    
+    Args:
+        product_code: AWS Marketplace product code (optional, will be resolved from metadata)
+        dimension: Usage dimension to report (default: Usage_Hours) 
+        quantity: Usage quantity to report (default: 1)
+        
+    Returns:
+        True if usage reported successfully, False otherwise
+    """
+    try:
+        # Generate a unique usage record ID 
+        usage_record_id = str(uuid.uuid4())
+        
+        # Use default product code if not provided
+        # In real marketplace setup, this would come from environment or resolved customer
+        if not product_code:
+            product_code = "photo-kiosk-backend"  # Default placeholder
+            
+        logger.info(f"Reporting marketplace usage: product_code={product_code}, dimension={dimension}, quantity={quantity}")
+        
+        # Report usage to AWS Marketplace
+        response = marketplace_metering.batch_meter_usage(
+            UsageRecords=[
+                {
+                    'Timestamp': datetime.utcnow(),
+                    'CustomerIdentifier': 'anonymous',  # Default for public usage
+                    'Dimension': dimension,
+                    'Quantity': quantity,
+                    'UsageAllocations': []
+                }
+            ],
+            ProductCode=product_code
+        )
+        
+        logger.info(f"Marketplace usage reported successfully: {response}")
+        return True
+        
+    except Exception as e:
+        logger.warning(f"Failed to report marketplace usage: {str(e)}")
+        # Don't fail the main request if usage reporting fails
+        return False
 
 def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """Main Lambda handler."""
@@ -555,6 +603,9 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 ExpressionAttributeValues={':file_path': file_path}
             )
             
+            # Report usage to AWS Marketplace for billing
+            report_marketplace_usage(dimension="Media_Upload", quantity=1)
+            
             return {
                 'statusCode': 200,
                 'headers': {
@@ -615,6 +666,9 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 'get_object',
                 response_headers={'ResponseContentType': item['content_type']}
             )
+            
+            # Report usage to AWS Marketplace for billing
+            report_marketplace_usage(dimension="Media_Download", quantity=1)
             
             return {
                 'statusCode': 200,
@@ -706,6 +760,9 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             
             qr_code = generate_qr_code(url_to_use)
             mapping = create_qr_mapping(media_id, url_to_use, expires_at)
+            
+            # Report usage to AWS Marketplace for billing
+            report_marketplace_usage(dimension="QR_Code_Generation", quantity=1)
             
             return {
                 'statusCode': 200,
