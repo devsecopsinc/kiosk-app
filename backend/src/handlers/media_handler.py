@@ -202,12 +202,11 @@ def extract_path_param(path: str, resource: str) -> str:
     return None
 
 def generate_media_path(media_id: str, file_name: str) -> str:
-    """Generate media path based on media_id and file_name."""
-    # Generate path using today's date for organization
+    """Generate a path for media storage with simplified date-based structure."""
     now = datetime.now()
     date_string = now.strftime("%Y-%m-%d")
     
-    # Get the base filename without extension and path
+    # Extract just the filename without path if file_name includes path
     base_file_name = os.path.basename(file_name)
     
     # Create simplified path: media/YYYY-MM-DD/media_id/file_name
