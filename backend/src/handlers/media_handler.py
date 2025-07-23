@@ -19,34 +19,6 @@ import qrcode
 from botocore.exceptions import ClientError, BotoCoreError
 from pydantic import BaseModel, Field, ValidationError
 
-import urllib3
-
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
-
-def empty_bucket(bucket_name):
-    s3 = boto3.resource('s3')
-    bucket = s3.Bucket(bucket_name)
-    # Delete all objects (including versions if versioning enabled)
-    bucket.object_versions.delete()
-    logger.info(f"Emptied bucket: {bucket_name}")
-
-def send_response(event, context, status, reason=None):
-    response_url = event['ResponseURL']
-    response_body = {
-        'Status': status,
-        'Reason': reason or 'See the details in CloudWatch Log Stream: ' + context.log_stream_name,
-        'PhysicalResourceId': context.log_stream_name,
-        'StackId': event['StackId'],
-        'RequestId': event['RequestId'],
-        'LogicalResourceId': event['LogicalResourceId'],
-        'Data': {}
-    }
-    json_response_body = json.dumps(response_body)
-    http = urllib3.PoolManager()
-    headers = {'content-type': '', 'content-length': str(len(json_response_body))}
-    http.request('PUT', response_url, body=json_response_body, headers=headers)
-
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -618,20 +590,6 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """Main Lambda handler with OOP architecture but matching stable version logic."""
     try:
         logger.info(f"Received event: {json.dumps(event)}")
-        
-        # Custom Resource S3 cleanup logic
-        if event.get('RequestType') in ['Create', 'Update', 'Delete'] and 'BucketNames' in event.get('ResourceProperties', {}):
-            try:
-                if event['RequestType'] == 'Delete':
-                    bucket_names = event['ResourceProperties']['BucketNames']
-                    for bucket_name in bucket_names:
-                        if bucket_name and bucket_name != "NoCloudTrailLogsBucket":
-                            empty_bucket(bucket_name)
-                send_response(event, context, 'SUCCESS')
-            except Exception as e:
-                logger.error(f"Failed to empty buckets: {e}")
-                send_response(event, context, 'FAILED', reason=str(e))
-            return {'statusCode': 200, 'body': 'Custom resource handled'}
         
         # Extract method and path from event
         method = event['httpMethod']
