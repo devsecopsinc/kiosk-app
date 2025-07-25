@@ -23,12 +23,22 @@ from pydantic import BaseModel, Field, ValidationError
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Initialize AWS clients - as in legacy code
+s3 = boto3.client('s3')
+dynamodb = boto3.resource('dynamodb')
+
 # Constants - match stable version environment variables
-MEDIA_BUCKET = os.environ.get('MEDIA_BUCKET', 'photo-kiosk-media')
-MEDIA_TABLE = os.environ.get('MEDIA_TABLE', 'photo-kiosk-media')
-USER_TABLE = os.environ.get('USER_TABLE', 'photo-kiosk-users')
-QR_MAPPING_TABLE = os.environ.get('QR_MAPPING_TABLE', 'photo-kiosk-qr')
-MEDIA_EXPIRATION_DAYS = int(os.environ.get('MEDIA_EXPIRATION_DAYS', '7'))
+MEDIA_BUCKET = os.environ['MEDIA_BUCKET']  # Required environment variable - as in legacy code
+MEDIA_TABLE = os.environ['MEDIA_TABLE']    # Required environment variable - as in legacy code
+USER_TABLE = os.environ['USER_TABLE']      # Required environment variable - as in legacy code
+QR_MAPPING_TABLE = os.environ['QR_MAPPING_TABLE']  # Required environment variable - as in legacy code
+MEDIA_EXPIRATION_DAYS = int(os.environ['MEDIA_EXPIRATION_DAYS'])  # Required environment variable - as in legacy code
+
+# Initialize DynamoDB tables - as in legacy code
+media_table = dynamodb.Table(MEDIA_TABLE)
+user_table = dynamodb.Table(USER_TABLE)
+qr_mapping_table = dynamodb.Table(QR_MAPPING_TABLE)
+
 ALLOWED_CONTENT_TYPES = [
     'image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp',
     'video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/webm'
@@ -86,6 +96,39 @@ def convert_dynamodb_item(item: Dict[str, Any]) -> Dict[str, Any]:
     else:
         return item
 
+def generate_presigned_url(bucket: str, key: str, operation: str, expires_in: int = 3600, response_headers: Optional[Dict[str, str]] = None) -> str:
+    """Generate a presigned URL for S3 operations (match stable version)."""
+    try:
+        logger.info(f"Generating presigned URL: bucket={bucket}, key={key}, operation={operation}")
+        params = {'Bucket': bucket, 'Key': key}
+        
+        # Add response headers if provided
+        if response_headers:
+            params.update(response_headers)
+            logger.info(f"Adding response headers: {response_headers}")
+            
+        url = s3.generate_presigned_url(
+            ClientMethod=operation,
+            Params=params,
+            ExpiresIn=expires_in
+        )
+        
+        # Log the generated URL
+        safe_url = url[:50] + '...' if len(url) > 50 else url
+        logger.info(f"Generated presigned URL: {safe_url}")
+        
+        # Make sure the URL is properly encoded
+        # URL format should be: https://bucket.s3.amazonaws.com/key?params
+        # AWS SDK should handle encoding properly, but we can add extra verification here
+        if '%' in key and '%25' not in url:
+            logger.warning(f"Key contains percent signs that might not be properly encoded: {key}")
+        
+        # Return the URL
+        return url
+    except Exception as e:
+        logger.error(f"Error generating presigned URL: {str(e)}")
+        raise
+
 def generate_media_path(media_id: str, file_name: str) -> str:
     """Generate a path for media storage with date-based structure (match stable version)."""
     now = datetime.now()
@@ -127,6 +170,25 @@ def normalize_path(path: str) -> str:
     # If the path is already clean (e.g., /media), return as is
     logger.info(f"Path appears to be already normalized: {path}")
     return path
+
+def create_api_response(status_code: int, body: Dict[str, Any], cache_control: str = "no-cache, no-store, must-revalidate") -> Dict[str, Any]:
+    """Create a standardized API response (match stable version)."""
+    # Convert any DynamoDB types to JSON serializable types
+    converted_body = convert_dynamodb_item(body)
+    
+    return {
+        'statusCode': status_code,
+        'headers': {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+            'Cache-Control': cache_control
+        },
+        'body': json.dumps(converted_body)
+    }
+
+def create_error_response(status_code: int, error_message: str) -> Dict[str, Any]:
+    """Create a standardized error response (match stable version)."""
+    return create_api_response(status_code, {'error': error_message})
 
 # Repository Protocols
 class MediaRepository(Protocol):
@@ -198,7 +260,7 @@ class DynamoDBMediaRepository:
             
             # Add theme options if provided
             if metadata.theme_options:
-                theme_dict = metadata.theme_options.dict(exclude_none=True)
+                theme_dict = metadata.theme_options.model_dump(exclude_none=True)
                 if theme_dict:
                     item['theme_options'] = theme_dict
             
@@ -606,13 +668,10 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 path = f"/api/v1/{proxy_param}"
                 logger.info(f"Updated path using proxy parameter: {path}")
         
-        # Initialize dependencies
-        s3_client = boto3.client('s3')
-        dynamodb_resource = boto3.resource('dynamodb')
-        
-        storage_repo = S3StorageRepository(s3_client)
-        media_repo = DynamoDBMediaRepository(dynamodb_resource, MEDIA_TABLE)
-        qr_repo = DynamoDBQRRepository(dynamodb_resource, QR_MAPPING_TABLE)
+        # Initialize dependencies using global clients - as in legacy code
+        storage_repo = S3StorageRepository(s3)
+        media_repo = DynamoDBMediaRepository(dynamodb, MEDIA_TABLE)
+        qr_repo = DynamoDBQRRepository(dynamodb, QR_MAPPING_TABLE)
         qr_generator = StandardQRGenerator()
         
         media_service = MediaService(storage_repo, media_repo)
